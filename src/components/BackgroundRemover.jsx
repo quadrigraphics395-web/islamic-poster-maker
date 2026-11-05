@@ -57,8 +57,15 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
   const dimensionsRef = useRef(null);
   const originalImageRef = useRef(null);
   const workingDimensionsRef = useRef(null);
+  const pointersRef = useRef(new Map());
+  const panRef = useRef(null);
+  const pinchRef = useRef(null);
+  const touchEditRef = useRef(null);
   const [dimensions, setDimensions] = useState(null);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [toolsOpen, setToolsOpen] = useState(true);
+  const [navigationMode, setNavigationMode] = useState(false);
   const [mode, setMode] = useState("contiguous");
   const [tool, setTool] = useState("wand");
   const [tolerance, setTolerance] = useState(24);
@@ -80,6 +87,11 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
       1,
     );
     setZoom(Math.max(0.02, nextZoom));
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const changeZoom = useCallback((multiplier) => {
+    setZoom((value) => Math.max(0.02, Math.min(8, value * multiplier)));
   }, []);
 
   const redrawImage = useCallback(() => {
@@ -382,6 +394,136 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
     moveBrush.previousPoint = null;
   }
 
+  function beginPan(event) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      panX: pan.x,
+      panY: pan.y,
+    };
+  }
+
+  function updatePan(event) {
+    const activePan = panRef.current;
+    if (!activePan || activePan.pointerId !== event.pointerId) return false;
+    setPan({
+      x: activePan.panX + event.clientX - activePan.startX,
+      y: activePan.panY + event.clientY - activePan.startY,
+    });
+    return true;
+  }
+
+  function pointerDistance(points) {
+    return Math.hypot(points[0].clientX - points[1].clientX, points[0].clientY - points[1].clientY);
+  }
+
+  function pointerCenter(points) {
+    return {
+      x: (points[0].clientX + points[1].clientX) / 2,
+      y: (points[0].clientY + points[1].clientY) / 2,
+    };
+  }
+
+  function beginCanvasPointer(event) {
+    if (busy) return;
+    if (event.pointerType === "touch") pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    const points = [...pointersRef.current.values()];
+    if (points.length >= 2) {
+      endBrush();
+      touchEditRef.current = null;
+      pinchRef.current = { distance: pointerDistance(points), zoom, pan: { ...pan }, center: pointerCenter(points) };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+    if (navigationMode || event.button === 1 || event.shiftKey) {
+      beginPan(event);
+      return;
+    }
+    if (event.pointerType === "touch") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      touchEditRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, started: false };
+      return;
+    }
+    if (tool === "wand") addColorAt(event);
+    else startBrush(event, tool === "restore");
+  }
+
+  function updateCanvasPointer(event) {
+    if (event.pointerType === "touch" && pointersRef.current.has(event.pointerId)) pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    const points = [...pointersRef.current.values()];
+    if (pinchRef.current && points.length >= 2) {
+      event.preventDefault();
+      const gesture = pinchRef.current;
+      const center = pointerCenter(points);
+      const nextZoom = Math.max(0.02, Math.min(8, gesture.zoom * pointerDistance(points) / gesture.distance));
+      const viewport = viewportRef.current.getBoundingClientRect();
+      const startX = gesture.center.x - (viewport.left + viewport.width / 2);
+      const startY = gesture.center.y - (viewport.top + viewport.height / 2);
+      const centerX = center.x - (viewport.left + viewport.width / 2);
+      const centerY = center.y - (viewport.top + viewport.height / 2);
+      const scale = nextZoom / gesture.zoom;
+      setZoom(nextZoom);
+      setPan({ x: centerX + (gesture.pan.x - startX) * scale, y: centerY + (gesture.pan.y - startY) * scale });
+      return;
+    }
+    if (updatePan(event)) return;
+    const touchEdit = touchEditRef.current;
+    if (event.pointerType === "touch" && touchEdit?.pointerId === event.pointerId) {
+      if (tool !== "wand" && !touchEdit.started && Math.hypot(event.clientX - touchEdit.startX, event.clientY - touchEdit.startY) > 3) {
+        touchEdit.started = true;
+        startBrush(event, tool === "restore");
+      }
+      if (touchEdit.started) moveBrush(event, tool === "restore");
+      return;
+    }
+    if (tool !== "wand") moveBrush(event, tool === "restore");
+  }
+
+  function endCanvasPointer(event, cancelled = false) {
+    if (event.pointerType === "touch") pointersRef.current.delete(event.pointerId);
+    if (pinchRef.current) {
+      if (pointersRef.current.size < 2) pinchRef.current = null;
+      touchEditRef.current = null;
+      return;
+    }
+    if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null;
+      return;
+    }
+    const touchEdit = touchEditRef.current;
+    if (!cancelled && event.pointerType === "touch" && touchEdit?.pointerId === event.pointerId) {
+      if (tool === "wand") addColorAt(event);
+      else {
+        if (!touchEdit.started) startBrush(event, tool === "restore");
+        endBrush();
+      }
+      touchEditRef.current = null;
+      return;
+    }
+    if (cancelled) endBrush();
+    else if (tool !== "wand") endBrush();
+  }
+
+  function handleWheel(event) {
+    if (!dimensions) return;
+    event.preventDefault();
+    changeZoom(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+  }
+
+  function selectTool(nextTool) {
+    endBrush();
+    setTool(nextTool);
+    setNavigationMode(false);
+  }
+
+  function toggleNavigation() {
+    endBrush();
+    setNavigationMode((active) => !active);
+  }
+
   async function applyChanges() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -453,36 +595,41 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
             <span>IMAGE EDITOR</span>
             <h2 id="background-remover-title">Background Remover</h2>
           </div>
+          <div className="background-remover-view-actions" aria-label="Workspace controls">
+            <button type="button" className={toolsOpen ? "is-active" : ""} aria-pressed={toolsOpen} onClick={() => setToolsOpen((open) => !open)}>Tools</button>
+            <button type="button" className={navigationMode ? "is-active" : ""} aria-pressed={navigationMode} onClick={toggleNavigation}>{navigationMode ? "Editing" : "Move"}</button>
+          </div>
           <div className="background-remover-zoom">
-            <button type="button" aria-label="Zoom out" disabled={!dimensions} onClick={() => setZoom((value) => Math.max(0.02, value / 1.25))}>−</button>
+            <button type="button" aria-label="Zoom out" disabled={!dimensions} onClick={() => changeZoom(1 / 1.25)}>−</button>
             <span>{Math.round(zoom * 100)}%</span>
-            <button type="button" aria-label="Zoom in" disabled={!dimensions} onClick={() => setZoom((value) => Math.min(8, value * 1.25))}>+</button>
+            <button type="button" aria-label="Zoom in" disabled={!dimensions} onClick={() => changeZoom(1.25)}>+</button>
             <button type="button" onClick={fitImage}>Fit</button>
           </div>
           <button type="button" className="background-remover-close" aria-label="Cancel image editing" onClick={onCancel}>×</button>
         </header>
 
-        <div className="background-remover-workspace">
-          <aside className="background-remover-tools" aria-label="Image editing tools">
+        <div className={`background-remover-workspace${toolsOpen ? " has-tools" : " tools-hidden"}`}>
+          <aside className="background-remover-tools" aria-label="Image editing tools" hidden={!toolsOpen}>
             <span className="background-remover-panel-title">TOOLS</span>
-            <button type="button" className={tool === "wand" ? "is-active" : ""} onClick={() => setTool("wand")}>✳ Magic Wand</button>
-            <button type="button" className={tool === "eraser" ? "is-active" : ""} onClick={() => setTool("eraser")}>⌫ Eraser</button>
-            <button type="button" className={tool === "restore" ? "is-active" : ""} onClick={() => setTool("restore")}>↶ Restore</button>
+            <button type="button" className={tool === "wand" ? "is-active" : ""} onClick={() => selectTool("wand")}>✳ Magic Wand</button>
+            <button type="button" className={tool === "eraser" ? "is-active" : ""} onClick={() => selectTool("eraser")}>⌫ Eraser</button>
+            <button type="button" className={tool === "restore" ? "is-active" : ""} onClick={() => selectTool("restore")}>↶ Restore</button>
             <button type="button" onClick={undo} disabled={!undoCount}>↶ Undo</button>
             <button type="button" onClick={redo} disabled={!redoCount}>↷ Redo</button>
             <button type="button" onClick={restoreOriginal} disabled={!dimensions}>Original</button>
           </aside>
 
-          <div className="background-remover-canvas-wrap" ref={viewportRef}>
-            <div className="background-remover-canvas-stack" style={{ width: displayedWidth, height: displayedHeight }}>
+          <div className="background-remover-canvas-wrap" ref={viewportRef} onWheel={handleWheel}>
+            <div className="background-remover-canvas-stack" style={{ width: displayedWidth, height: displayedHeight, transform: `translate(${pan.x}px, ${pan.y}px)` }}>
               <canvas
                 ref={canvasRef}
                 className="background-remover-image-canvas"
                 style={{ width: displayedWidth, height: displayedHeight }}
-                onPointerDown={tool === "wand" ? addColorAt : (event) => startBrush(event, tool === "restore")}
-                onPointerMove={tool === "wand" ? undefined : (event) => moveBrush(event, tool === "restore")}
-                onPointerUp={endBrush}
-                onPointerCancel={endBrush}
+                onPointerDown={beginCanvasPointer}
+                onPointerMove={updateCanvasPointer}
+                onPointerUp={(event) => endCanvasPointer(event)}
+                onPointerCancel={(event) => endCanvasPointer(event, true)}
+                onLostPointerCapture={(event) => endCanvasPointer(event, true)}
               />
               <canvas
                 ref={overlayRef}

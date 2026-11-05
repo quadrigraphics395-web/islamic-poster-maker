@@ -96,6 +96,10 @@
   grid-template-columns: 170px minmax(0, 1fr) 270px;
 }
 
+.background-remover-workspace.tools-hidden {
+  grid-template-columns: minmax(0, 1fr) 270px;
+}
+
 .background-remover-tools,
 .background-remover-settings {
   min-height: 0;
@@ -109,6 +113,10 @@
 
 .background-remover-tools {
   border-right: 1px solid #e0e6df;
+}
+
+.background-remover-tools[hidden] {
+  display: none;
 }
 
 .background-remover-tools button {
@@ -138,13 +146,14 @@
   background-image: linear-gradient(45deg, #cdd4ce 25%, transparent 25%), linear-gradient(-45deg, #cdd4ce 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cdd4ce 75%), linear-gradient(-45deg, transparent 75%, #cdd4ce 75%);
   background-size: 20px 20px;
   background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .background-remover-canvas-stack {
   position: relative;
   margin: auto;
   flex: none;
+  transform-origin: center;
   box-shadow: 0 5px 25px rgba(18, 35, 25, 0.24);
 }
 
@@ -354,6 +363,10 @@
   .background-remover-workspace {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .background-remover-workspace.tools-hidden {
+    grid-template-columns: 1fr;
   }
 
   .background-remover-tools {
