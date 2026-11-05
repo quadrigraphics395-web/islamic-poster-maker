@@ -2922,6 +2922,445 @@ footer {
 .logo img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+
+/* Studio-wide visual polish */
+body {
+  background: #f4f6f2;
+  color: #20352b;
+  font-family: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+.app {
+  color: #20352b;
+}
+
+.header {
+  min-height: 76px;
+  padding: 10px max(20px, calc((100vw - 1200px) / 2));
+  border-bottom: 1px solid #e7ebe5;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 18px rgba(27, 48, 35, 0.045);
+}
+
+.home-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.home-brand .logo {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 13px;
+  object-fit: contain;
+  box-shadow: 0 2px 8px rgba(32, 53, 43, 0.12);
+}
+
+.home-brand strong,
+.home-brand span {
+  display: block;
+}
+
+.home-brand strong {
+  font-size: 15px;
+  letter-spacing: -0.2px;
+}
+
+.home-brand span {
+  margin-top: 2px;
+  color: #7b887f;
+  font-size: 11px;
+}
+
+.app > main {
+  width: min(100%, 1240px);
+  max-width: 1240px;
+  padding: clamp(20px, 4vw, 48px) clamp(16px, 3vw, 32px) 56px;
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(38px, 7vw, 76px) 24px;
+  border: 1px solid #dfe9df;
+  border-radius: 22px;
+  background: linear-gradient(125deg, #e8f2e9 0%, #f4f5ec 55%, #f8f0df 100%);
+  box-shadow: 0 14px 40px rgba(35, 58, 41, 0.06);
+}
+
+.hero h2 {
+  color: #183a2c;
+  font-size: clamp(26px, 4vw, 38px);
+  font-weight: 750;
+  letter-spacing: -0.8px;
+}
+
+.hero p {
+  color: #64746a;
+  font-size: 15px;
+}
+
+.create-btn {
+  min-height: 48px;
+  border-radius: 10px;
+  background: #176b4d;
+  box-shadow: 0 6px 16px rgba(23, 107, 77, 0.2);
+  font-weight: 700;
+  transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.create-btn:hover {
+  transform: translateY(-1px);
+  background: #10563d;
+  box-shadow: 0 9px 20px rgba(23, 107, 77, 0.24);
+}
+
+.section-title {
+  margin: 34px 0 15px;
+  color: #263b30;
+  font-size: 21px;
+  font-weight: 720;
+  letter-spacing: -0.35px;
+}
+
+.local-admin-controls,
+.template-card,
+.category {
+  border-color: #e3e9e3;
+  box-shadow: 0 5px 18px rgba(27, 48, 35, 0.055);
+}
+
+.editor-page {
+  background: #eff2ed;
+  font-family: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+.editor-topbar {
+  min-height: 68px;
+  gap: 10px;
+  padding: 0 16px;
+  border-bottom-color: #e4e9e3;
+  box-shadow: 0 3px 12px rgba(27, 48, 35, 0.04);
+}
+
+.editor-topbar .back-btn,
+.editor-topbar .history-actions button,
+.editor-topbar .export-actions button {
+  min-height: 40px;
+  border-color: #dce5dc;
+  border-radius: 9px;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.editor-topbar button:hover:not(:disabled),
+.editor-menu-panel button:hover:not(:disabled),
+.editor-toolbar button:hover:not(:disabled) {
+  border-color: #c4d6c8;
+  background: #f1f7f2;
+}
+
+.editor-topbar button:focus-visible,
+.editor-menu summary:focus-visible,
+.editor-menu-panel button:focus-visible,
+.properties-panel button:focus-visible,
+.properties-panel input:focus-visible,
+.properties-panel select:focus-visible,
+.properties-panel textarea:focus-visible {
+  outline: 3px solid rgba(23, 107, 77, 0.24);
+  outline-offset: 2px;
+}
+
+.editor-brand {
+  flex-basis: 178px;
+  gap: 9px;
+}
+
+.editor-brand .logo {
+  overflow: hidden;
+  border: 1px solid #e2e8df;
+  border-radius: 11px;
+  background: #f5f7f3;
+}
+
+.editor-brand .logo img {
+  display: block;
+}
+
+.editor-brand strong {
+  color: #253b2f;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.editor-menu-bar {
+  gap: 3px;
+}
+
+.editor-menu > summary {
+  min-height: 40px;
+  padding: 0 9px;
+  border-color: transparent;
+  color: #46594b;
+  font-size: 11px;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.editor-menu > summary span {
+  width: 18px;
+  color: #778c7b;
+  font-size: 15px;
+  text-align: center;
+}
+
+.editor-menu[open] > summary {
+  border-color: #d8e5d9;
+  background: #edf5ef;
+  color: #155a40;
+}
+
+.editor-menu-panel {
+  gap: 3px;
+  padding: 9px;
+  border-color: #e0e7df;
+  border-radius: 12px;
+  box-shadow: 0 18px 42px rgba(24, 43, 31, 0.16);
+}
+
+.editor-menu:last-of-type .editor-menu-panel {
+  right: 0;
+  left: auto;
+}
+
+.editor-topbar .history-actions button {
+  min-width: 62px;
+  font-weight: 650;
+}
+
+.editor-topbar .history-actions button:disabled {
+  color: #aab3ac;
+  background: #f7f8f6;
+}
+
+.editor-topbar .export-actions .export-primary {
+  box-shadow: 0 3px 9px rgba(23, 107, 77, 0.17);
+}
+
+.editor-workspace {
+  grid-template-columns: minmax(0, 1fr) 292px;
+}
+
+.editor-stage {
+  padding: 20px clamp(16px, 2.5vw, 36px) 12px;
+  background-color: #eff2ed;
+  background-image: radial-gradient(#dce2da 0.7px, transparent 0.7px);
+  background-size: 20px 20px;
+}
+
+.stage-heading {
+  margin-bottom: 14px;
+}
+
+.stage-heading h1 {
+  color: #20392c;
+  font-size: 20px;
+  font-weight: 720;
+}
+
+.size-picker select,
+.custom-size-fields input,
+.font-select,
+.hex-input,
+.number-input,
+.text-input {
+  border-color: #dce4dc;
+  border-radius: 9px;
+  color: #263b30;
+}
+
+.poster-canvas {
+  border-radius: 4px;
+  box-shadow: 0 16px 42px rgba(27, 48, 35, 0.22), 0 0 0 1px rgba(38, 59, 48, 0.08);
+}
+
+.properties-panel {
+  padding: 20px 17px;
+  border-left-color: #e5eae4;
+  background: #fff;
+}
+
+.properties-panel h2 {
+  margin-bottom: 5px;
+  color: #253b2f;
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: -0.2px;
+}
+
+.properties-panel .panel-hint {
+  margin-bottom: 12px;
+  color: #839087;
+  font-size: 11px;
+}
+
+.properties-panel > .text-section {
+  margin-top: 7px;
+  padding: 0 10px 8px;
+  border: 1px solid #e7ece6;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.properties-panel > .text-section[open] {
+  border-color: #dce8dc;
+  background: #fcfdfb;
+}
+
+.properties-panel > .text-section > summary {
+  min-height: 42px;
+  padding: 9px 2px;
+  color: #405447;
+  font-size: 12px;
+}
+
+.properties-panel > .text-section[open] > summary {
+  color: #176b4d;
+}
+
+.properties-panel > .text-section > summary::after {
+  width: 20px;
+  height: 20px;
+  border-color: #e0e8df;
+  background: #f6f8f5;
+}
+
+.properties-panel .field-label {
+  color: #536358;
+  font-size: 11px;
+}
+
+.properties-panel button,
+.editor-menu-panel button {
+  border-radius: 8px;
+}
+
+.layer-multi-select {
+  margin-bottom: 8px;
+  padding: 7px;
+}
+
+.layer-position-actions button {
+  border-radius: 8px;
+}
+
+.canvas-caption {
+  color: #849087;
+}
+
+.background-remover {
+  font-family: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+@media (max-width: 900px) {
+  .editor-topbar {
+    gap: 7px;
+    padding-inline: 10px;
+  }
+
+  .editor-brand {
+    flex-basis: 150px;
+  }
+
+  .editor-menu > summary {
+    gap: 4px;
+    padding-inline: 7px;
+    font-size: 10px;
+  }
+
+  .editor-workspace {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+}
+
+@media (max-width: 600px) {
+  .header {
+    min-height: 64px;
+    padding-inline: 16px;
+  }
+
+  .home-brand .logo {
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
+  }
+
+  .app > main {
+    padding: 22px 14px 42px;
+  }
+
+  .hero {
+    padding: 34px 17px;
+    border-radius: 17px;
+  }
+
+  .hero h2 {
+    font-size: 25px;
+  }
+
+  .hero p {
+    font-size: 13px;
+  }
+
+  .editor-topbar {
+    box-shadow: 0 2px 9px rgba(27, 48, 35, 0.035);
+  }
+
+  .editor-menu-bar {
+    border-top-color: #e5ebe4;
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 -8px 22px rgba(27, 48, 35, 0.09);
+    backdrop-filter: blur(14px);
+  }
+
+  .editor-menu > summary {
+    min-width: 49px;
+    min-height: 48px;
+    border-radius: 9px;
+  }
+
+  .editor-menu[open] > summary {
+    border-color: transparent;
+    background: #edf5ef;
+  }
+
+  .editor-menu-panel {
+    max-height: min(42dvh, 380px);
+    border-radius: 14px;
+    box-shadow: 0 16px 38px rgba(24, 43, 31, 0.18);
+  }
+
+  .editor-menu:last-of-type .editor-menu-panel {
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+
+  .editor-workspace {
+    grid-template-rows: minmax(0, 1fr) minmax(108px, 25dvh);
+  }
+
+  .editor-stage {
+    background-size: 16px 16px;
+  }
+
+  .properties-panel {
+    background: #fbfcfa;
+  }
+
+  .properties-panel > .text-section {
+    padding-inline: 9px;
+  }
 }

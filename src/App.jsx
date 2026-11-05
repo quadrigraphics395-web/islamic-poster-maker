@@ -2534,6 +2534,18 @@ function deletePage(pageId) {
     window.setTimeout(() => { menu.open = false; }, 0);
   }
 
+  function togglePropertyAccordion(event) {
+    const summary = event.target.closest(".text-section > summary");
+    if (!summary) return;
+    const activeSection = summary.parentElement;
+    window.setTimeout(() => {
+      if (!activeSection.open) return;
+      activeSection.parentElement.querySelectorAll(".text-section[open]").forEach((section) => {
+        if (section !== activeSection) section.open = false;
+      });
+    }, 0);
+  }
+
   function applyProject(project, projectId = null, projectName = "") {
     if (!project || typeof project !== "object") throw new Error("This project file does not contain a valid poster.");
     setCanvasViewOffset({ x: 0, y: 0 });
@@ -2996,10 +3008,10 @@ function deletePage(pageId) {
       <div className="editor-page">
         <header className="editor-topbar">
           <button className="back-btn" onClick={() => setEditor(false)}>← Back</button>
-          <div className="editor-brand"><span className="logo">🕌</span><div><strong>Qadri Islamic Poster</strong><small>{activeProjectName || templateName}</small></div></div>
+          <div className="editor-brand"><span className="logo"><img src="/logo.png" alt="" /></span><div><strong>Qadri Poster Maker</strong><small>{activeProjectName || templateName}</small></div></div>
           <nav className="editor-menu-bar" aria-label="Editor actions">
             <details id="editor-menu-add" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>＋</span>Add</summary>
+              <summary title="Add text, images and shapes" onClick={toggleEditorMenu}><span>＋</span>Add</summary>
               <div className="editor-menu-panel">
                 <button type="button" onClick={addText}>Add Text</button>
                 <button type="button" onClick={() => uploadRef.current?.click()}>{selectedObject?.type === "image" ? "Replace Image" : "Upload Image"}</button>
@@ -3008,7 +3020,7 @@ function deletePage(pageId) {
               </div>
             </details>
             <details id="editor-menu-edit" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>✎</span>Edit</summary>
+              <summary title="Edit and duplicate the selected object" onClick={toggleEditorMenu}><span>✎</span>Edit</summary>
               <div className="editor-menu-panel">
                 {selectedObject?.type === "image" && <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit Image / Background Remover</button>}
                 {selectedObject && <button type="button" onClick={() => flipSelected("horizontal")}>Flip Horizontal</button>}
@@ -3020,7 +3032,7 @@ function deletePage(pageId) {
               </div>
             </details>
             <details id="editor-menu-vector" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>⌘</span>Vector</summary>
+              <summary title="Draw, edit nodes and combine vector shapes" onClick={toggleEditorMenu}><span>⌘</span>Vector</summary>
               <div className="editor-menu-panel editor-menu-panel-wide vector-menu-panel">
                 <div className="vector-tool-row">
                   <button type="button" className={activeTool === "select" ? "is-current" : ""} onClick={() => { setActiveTool("select"); changePathDraft(null); }}>Select</button>
@@ -3075,7 +3087,7 @@ function deletePage(pageId) {
               </div>
             </details>
             <details id="editor-menu-arrange" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>↕</span>Arrange</summary>
+              <summary title="Manage layers, position and alignment" onClick={toggleEditorMenu}><span>↕</span>Arrange</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <label htmlFor="toolbar-canvas-layers">Layers</label>
                 <select id="toolbar-canvas-layers" multiple size={Math.min(5, Math.max(2, objects.length))} value={selectedIds.map(String)} onChange={selectLayersFromEvent}>
@@ -3120,7 +3132,7 @@ function deletePage(pageId) {
               </div>
             </details>
             <details id="editor-menu-project" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>▣</span>Project</summary>
+              <summary title="Save projects, pages and templates" onClick={toggleEditorMenu}><span>▣</span>Project</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <button type="button" onClick={createNewProject}>New Project</button>
                 <button type="button" onClick={saveProject}>Save Project</button>
@@ -3142,7 +3154,7 @@ function deletePage(pageId) {
               </div>
             </details>
             <details id="editor-menu-more" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary onClick={toggleEditorMenu}><span>⋯</span>More</summary>
+              <summary title="More canvas and project tools" onClick={toggleEditorMenu}><span>⋯</span>More</summary>
               <div className="editor-menu-panel">
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
                 <label className="editor-menu-color"><span>Background color</span><input aria-label="Background color" type="color" value={background} onChange={(event) => { setBackground(event.target.value); setBackgroundMode("solid"); }} /></label>
@@ -3157,9 +3169,9 @@ function deletePage(pageId) {
             <button type="button" aria-label="Undo" title="Undo (Ctrl/Cmd+Z)" disabled={!history.length && !pathDraft?.length} onClick={undo}><span aria-hidden="true">↶</span><span className="history-action-label">Undo</span></button>
             <button type="button" aria-label="Redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled={!redoStack.length} onClick={redo}><span aria-hidden="true">↷</span><span className="history-action-label">Redo</span></button>
           </div>
-          <div className="export-actions">
-            <button type="button" onClick={() => openExport("jpg")}>JPG</button>
-            <button type="button" className="export-primary" onClick={() => openExport("png")}>Export PNG</button>
+          <div className="export-actions" aria-label="Export options">
+            <button type="button" title="Export as JPEG" onClick={() => openExport("jpg")}>JPG</button>
+            <button type="button" className="export-primary" title="Open PNG export settings" onClick={() => openExport("png")}>Export PNG</button>
           </div>
           <input ref={uploadRef} className="file-input" type="file" accept="image/*" onChange={uploadImage} />
           <input ref={backgroundUploadRef} className="file-input" type="file" accept="image/*" onChange={uploadBackgroundImage} />
@@ -3198,8 +3210,8 @@ function deletePage(pageId) {
             <div className="canvas-caption">{canvasSize} <span>{dimensions.width} × {dimensions.height} px</span></div>
           </main>
 
-          <aside className="properties-panel">
-            <h2>{selectedObject?.type === "text" ? "Text Properties" : "Design"}</h2>
+          <aside className="properties-panel" onClick={togglePropertyAccordion}>
+            <h2>{selectedObject ? `${selectedObject.type === "text" ? "Text" : selectedObject.type === "image" ? "Image" : selectedObject.type === "group" ? "Group" : "Shape"} Properties` : "Design & Background"}</h2>
             <p className="panel-hint">{selectedIds.length > 1 ? `${selectedIds.length} objects selected.` : "Select an element on your canvas to edit it."}</p>
             <details className="text-section background-properties" open>
               <summary>Background</summary>
@@ -3233,7 +3245,8 @@ function deletePage(pageId) {
               </>}
               <button className="reset-background-btn" type="button" onClick={resetBackground}>Reset Background</button>
             </details>
-            {objects.length > 0 && <>
+            {objects.length > 0 && <details className="text-section">
+              <summary>Arrange & Layers</summary>
               <label className="field-label" htmlFor="canvas-layers">Canvas layers</label>
               <select id="canvas-layers" className="font-select layer-multi-select" multiple size={Math.min(6, Math.max(2, objects.length))} value={selectedIds.map(String)} onChange={selectLayersFromEvent}>
                 {objects.flatMap((object, index) => {
@@ -3261,8 +3274,8 @@ function deletePage(pageId) {
                 <button type="button" disabled={!selectedObject || selectedIds.length !== 1} onClick={locateSelectedObject}>Locate Object</button>
                 {(canvasViewOffset.x || canvasViewOffset.y) !== 0 && <button type="button" onClick={resetCanvasView}>Reset Canvas View</button>}
               </div>
-            </>}
-            {selectedObject && <details className="text-section" open>
+            </details>}
+            {selectedObject && <details className="text-section">
               <summary>Transparency</summary>
               <label className="field-label" htmlFor="object-opacity">Object opacity <span>{selectedObject.opacity ?? 100}%</span></label>
               <input id="object-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.opacity ?? 100} onPointerDown={saveHistory} onChange={(event) => updateSelected({ opacity: Number(event.target.value) })} />
@@ -3306,7 +3319,7 @@ function deletePage(pageId) {
                 <button type="button" onClick={() => { saveHistory(); updateSelectedTransparencyMask({ stops: [...(selectedObject.transparencyMask.stops ?? defaultTransparencyStops), { id: nextObjectId("opacity-stop"), offset: 50, opacity: 50 }] }); }}>Add gradient stop</button>
               </>}
             </details>}
-            {selectedObject && <details className="text-section" open>
+            {selectedObject && <details className="text-section">
               <summary>Transform</summary>
               <label className="field-label" htmlFor="object-rotation">Rotation <span>{selectedObject.rotation ?? 0}°</span></label>
               <input id="object-rotation" className="size-range" type="range" min="-180" max="180" value={selectedObject.rotation ?? 0} onPointerDown={selectedObject.type === "group" ? saveHistory : undefined} onChange={(event) => updateSelected({ rotation: Number(event.target.value) })} />
@@ -3315,7 +3328,7 @@ function deletePage(pageId) {
                 <button type="button" aria-pressed={Boolean(selectedObject.flipVertical)} onClick={() => flipSelected("vertical")}>↕ Flip Vertical</button>
               </div>
             </details>}
-            {selectedObject?.type === "group" && <details className="text-section" open>
+            {selectedObject?.type === "group" && <details className="text-section">
               <summary>Group Transform</summary>
               <label className="field-label" htmlFor="group-width">Width <span>{selectedObject.width.toFixed(1)}%</span></label>
               <input id="group-width" className="size-range" type="range" min="2" max="200" value={selectedObject.width} onPointerDown={saveHistory} onChange={(event) => updateSelected({ width: Number(event.target.value) })} />
@@ -3323,12 +3336,12 @@ function deletePage(pageId) {
               <input id="group-height" className="size-range" type="range" min="2" max="200" value={selectedObject.height} onPointerDown={saveHistory} onChange={(event) => updateSelected({ height: Number(event.target.value) })} />
             </details>}
             {selectedObject?.type === "text" && <>
-              <details className="text-section" open>
+              <details className="text-section">
                 <summary>Text</summary>
                 <label className="field-label" htmlFor="poster-text">Content</label>
                 <textarea id="poster-text" className="text-input" dir={selectedObject.direction ?? "auto"} style={{ fontFamily: selectedObject.fontFamily ?? fontOptions[0].value }} value={selectedObject.text} onChange={(event) => updateSelected({ text: event.target.value })} />
               </details>
-              <details className="text-section" open>
+              <details className="text-section">
                 <summary>Font</summary>
                 <label className="field-label" htmlFor="font-family">Typeface</label>
                 <select id="font-family" className="font-select" value={selectedObject.fontFamily ?? fontOptions[0].value} onChange={(event) => updateSelected({ fontFamily: event.target.value })}>{fontOptions.map((font) => <option key={font.label} value={font.value}>{font.label}</option>)}</select>
@@ -3373,7 +3386,7 @@ function deletePage(pageId) {
                 <label className="field-label" htmlFor="text-direction">Direction</label>
                 <select id="text-direction" className="font-select" value={selectedObject.direction ?? "auto"} onChange={(event) => updateSelected({ direction: event.target.value })}><option value="auto">Automatic</option><option value="rtl">Right to left</option><option value="ltr">Left to right</option></select>
               </details>
-              <details className="text-section" open>
+              <details className="text-section">
                 <summary>Fill</summary>
                 <label className="field-label" htmlFor="fill-mode">Fill type</label>
                 <select id="fill-mode" className="font-select" value={selectedObject.fillMode ?? "solid"} onChange={(event) => updateSelected({ fillMode: event.target.value })}><option value="solid">Solid</option><option value="gradient">Gradient</option><option value="image">Image</option></select>
@@ -3401,7 +3414,7 @@ function deletePage(pageId) {
                   </>}
                 </>}
               </details>
-              <details className="text-section text-designs-section" open>
+              <details className="text-section text-designs-section">
                 <summary>Text Designs</summary>
                 <div className="text-design-grid">
                   {textDesigns.map((design) => <button key={design.label} type="button" className={`text-design-card${selectedObject.textDesignLabel === design.label ? " is-applied" : ""}`} aria-label={`Apply ${design.label} text design`} onClick={() => applyTextDesign(design)}>
@@ -3574,15 +3587,9 @@ function deletePage(pageId) {
  return (
   <div className="app">
 <header className="header">
-  <div className="logo">
-    <img
-      src="/logo.png"
-      alt="Logo"
-      style={{
-        width: "100%", height: "100%"
-      }}
-    />
-    <p>Quadri Islamic Poster</p>
+  <div className="home-brand">
+    <img className="logo" src="/logo.png" alt="Qadri Poster Maker logo" />
+    <div><strong>Qadri Poster Maker</strong><span>Design Studio</span></div>
   </div>
 
 </header>
@@ -3652,7 +3659,7 @@ function deletePage(pageId) {
       )}
 
       <footer>
-        <p>© 2026 Qadri Islamic Poster</p>
+        <p>© 2026 Qadri Poster Maker</p>
       </footer>
     </div>
   );
