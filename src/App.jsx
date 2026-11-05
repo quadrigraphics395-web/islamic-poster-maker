@@ -486,6 +486,7 @@ function App() {
   const [backgroundPanelOpen, setBackgroundPanelOpen] = useState(() => (
     typeof window === "undefined" || !window.matchMedia(COMPACT_EDITOR_QUERY).matches
   ));
+  const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
   const [backgroundImage, setBackgroundImage] = useState(null);
   const [backgroundGradientColors, setBackgroundGradientColors] = useState(["#10261f", "#31704b", "#ddbf72"]);
   const [backgroundGradientThirdEnabled, setBackgroundGradientThirdEnabled] = useState(false);
@@ -506,6 +507,7 @@ function App() {
   const [strokeEnabled, setStrokeEnabled] = useState(true);
   const [selectionMarquee, setSelectionMarquee] = useState(null);
   const [canvasViewOffset, setCanvasViewOffset] = useState({ x: 0, y: 0 });
+  const [canvasZoom, setCanvasZoom] = useState(1);
   const [groupEditMode, setGroupEditMode] = useState(false);
   const [groupEditGroupId, setGroupEditGroupId] = useState(null);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(null);
@@ -593,13 +595,27 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const projectUploadRef = useRef(null);
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
+  const canvasPointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
   const shapeIdRef = useRef(0);
   const pathDraftRef = useRef(null);
   useEffect(() => {
     const compactEditor = window.matchMedia(COMPACT_EDITOR_QUERY);
-    const syncBackgroundPanel = () => setBackgroundPanelOpen(!compactEditor.matches);
+    const syncBackgroundPanel = () => {
+      setBackgroundPanelOpen(!compactEditor.matches);
+      setMobilePropertiesOpen(false);
+    };
     compactEditor.addEventListener("change", syncBackgroundPanel);
     return () => compactEditor.removeEventListener("change", syncBackgroundPanel);
+  }, []);
+  useEffect(() => {
+    const orientation = window.matchMedia("(orientation: portrait)");
+    const fitAfterOrientationChange = () => {
+      setCanvasZoom(1);
+      setCanvasViewOffset({ x: 0, y: 0 });
+    };
+    orientation.addEventListener("change", fitAfterOrientationChange);
+    return () => orientation.removeEventListener("change", fitAfterOrientationChange);
   }, []);
   function changePathDraft(nextOrUpdate) {
     const next = typeof nextOrUpdate === "function" ? nextOrUpdate(pathDraftRef.current) : nextOrUpdate;
@@ -627,6 +643,10 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const dimensions = canvasSize === "Custom"
     ? { width: customWidth, height: customHeight }
     : canvasSizes[canvasSize];
+  useEffect(() => {
+    setCanvasZoom(1);
+    setCanvasViewOffset({ x: 0, y: 0 });
+  }, [dimensions.width, dimensions.height]);
   const selectedIslamicBackground = islamicBackgrounds.find((design) => design.id === selectedIslamicBackgroundId);
   const activeBackgroundImage = backgroundMode === "upload"
     ? backgroundImage
@@ -757,6 +777,38 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
 
   function resetCanvasView() {
     setCanvasViewOffset({ x: 0, y: 0 });
+    setCanvasZoom(1);
+  }
+
+  function changeCanvasZoom(multiplier) {
+    setCanvasZoom((current) => Math.min(3, Math.max(0.5, current * multiplier)));
+  }
+
+  function closeMobileProperties() {
+    setMobilePropertiesOpen(false);
+    setBackgroundPanelOpen(false);
+    document.querySelectorAll(".properties-panel > .text-section[open]").forEach((section) => { section.open = false; });
+  }
+
+  function openMobileProperty(section) {
+    const targetSelector = section === "background"
+      ? ".properties-panel > .background-properties"
+      : section === "arrange"
+        ? ".properties-panel > .text-section:nth-of-type(2)"
+        : null;
+    setBackgroundPanelOpen(section === "background");
+    window.setTimeout(() => {
+      const target = targetSelector
+        ? document.querySelector(targetSelector)
+        : [...document.querySelectorAll(".properties-panel > .text-section")].find((item) => (
+            item.querySelector("summary")?.textContent.trim() === (selectedObject?.type === "text" ? "Text" : "Transform")
+          ));
+      document.querySelectorAll(".properties-panel > .text-section[open]").forEach((item) => {
+        if (item !== target) item.open = false;
+      });
+      if (target && section !== "background") target.open = true;
+    }, 0);
+    setMobilePropertiesOpen(true);
   }
 
   function updateObjectById(items, id, updates) {
@@ -1803,8 +1855,28 @@ function deletePage(pageId) {
   }
 
   function beginCanvasPointer(event) {
+    if (event.pointerType === "touch") {
+      const points = canvasPointersRef.current;
+      points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (points.size === 2 && activeTool === "select") {
+        event.preventDefault();
+        dragRef.current = null;
+        const [first, second] = [...points.values()];
+        pinchRef.current = {
+          distance: Math.hypot(first.x - second.x, first.y - second.y) || 1,
+          zoom: canvasZoom,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     if (event.button !== 0 || event.target.closest(".resize-handle, .vector-node-overlay, .group-selection-outline")) return;
     event.preventDefault();
+    if (activeTool === "select" && canvasZoom > 1 && !event.target.closest(".canvas-object")) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = { type: "view-pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offset: canvasViewOffset };
+      return;
+    }
     const point = getCanvasPoint(event);
     if (activeTool === "freehand") {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1832,6 +1904,19 @@ function deletePage(pageId) {
 
   function updateCanvasInteraction(event) {
     const drag = dragRef.current;
+    if (pinchRef.current && canvasPointersRef.current.has(event.pointerId)) {
+      canvasPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const points = [...canvasPointersRef.current.values()];
+      if (points.length >= 2) {
+        const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        setCanvasZoom(Math.min(3, Math.max(0.5, pinchRef.current.zoom * distance / pinchRef.current.distance)));
+      }
+      return;
+    }
+    if (drag?.type === "view-pan" && drag.pointerId === event.pointerId) {
+      setCanvasViewOffset({ x: drag.offset.x + event.clientX - drag.startX, y: drag.offset.y + event.clientY - drag.startY });
+      return;
+    }
     if (activeTool === "freehand" && pathDraftRef.current && event.buttons) {
       const point = getCanvasPoint(event);
       const last = pathDraftRef.current.at(-1);
@@ -1898,6 +1983,8 @@ function deletePage(pageId) {
   }
 
   function endCanvasInteraction(event) {
+    canvasPointersRef.current.delete(event.pointerId);
+    if (canvasPointersRef.current.size < 2) pinchRef.current = null;
     if (dragRef.current?.pointerId != null && dragRef.current.pointerId !== event.pointerId) return;
     if (activeTool === "freehand" && pathDraftRef.current) {
       finishDrawing();
@@ -2548,6 +2635,7 @@ function deletePage(pageId) {
     const summary = event.target.closest(".text-section > summary");
     if (!summary) return;
     const activeSection = summary.parentElement;
+    if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) setMobilePropertiesOpen(true);
     window.setTimeout(() => {
       if (!activeSection.open) return;
       activeSection.parentElement.querySelectorAll(".text-section[open]").forEach((section) => {
@@ -3169,6 +3257,9 @@ function deletePage(pageId) {
             <details id="editor-menu-more" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary title="More canvas and project tools" onClick={toggleEditorMenu}><span>⋯</span>More</summary>
               <div className="editor-menu-panel">
+                <button type="button" onClick={() => openMobileProperty("background")}>Background & Properties</button>
+                {objects.length > 0 && <button type="button" onClick={() => openMobileProperty("arrange")}>Arrange & Layers</button>}
+                {selectedObject && <button type="button" onClick={() => openMobileProperty("selected")}>Selected Object Properties</button>}
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
                 <label className="editor-menu-color"><span>Background color</span><input aria-label="Background color" type="color" value={background} onChange={(event) => { setBackground(event.target.value); setBackgroundMode("solid"); }} /></label>
                 <button type="button" onClick={resetPoster}>Clear / Reset Poster</button>
@@ -3205,8 +3296,14 @@ function deletePage(pageId) {
                 </div>}
               </div>
             </div>
+            <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
+              <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
+              <span>{Math.round(canvasZoom * 100)}%</span>
+              <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
+              <button type="button" onClick={resetCanvasView}>Fit</button>
+            </div>
             <div className="canvas-wrap">
-              <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: dimensions.width > dimensions.height ? "100%" : "auto", height: dimensions.width > dimensions.height ? "auto" : "100%", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: canvasViewOffset.x || canvasViewOffset.y ? `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px)` : undefined }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
+              <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: dimensions.width > dimensions.height ? "100%" : "auto", height: dimensions.width > dimensions.height ? "auto" : "100%", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
                 <div className="poster-artwork">
                   {activeBackgroundImage && <img className="poster-background-image" src={activeBackgroundImage} alt="" draggable="false" />}
                   {backgroundOverlayEnabled && <div className="poster-background-overlay" style={{ opacity: backgroundOverlayOpacity / 100 }} />}
@@ -3223,7 +3320,9 @@ function deletePage(pageId) {
             <div className="canvas-caption">{canvasSize} <span>{dimensions.width} × {dimensions.height} px</span></div>
           </main>
 
-          <aside className="properties-panel" onClick={togglePropertyAccordion}>
+          {mobilePropertiesOpen && <button type="button" className="mobile-properties-backdrop" aria-label="Close properties" onClick={closeMobileProperties} />}
+          <aside className={`properties-panel${mobilePropertiesOpen ? " is-mobile-open" : ""}`} onClick={togglePropertyAccordion}>
+            <button type="button" className="mobile-properties-close" aria-label="Close properties" onClick={closeMobileProperties}>×</button>
             <h2>{selectedObject ? `${selectedObject.type === "text" ? "Text" : selectedObject.type === "image" ? "Image" : selectedObject.type === "group" ? "Group" : "Shape"} Properties` : "Design & Background"}</h2>
             <p className="panel-hint">{selectedIds.length > 1 ? `${selectedIds.length} objects selected.` : "Select an element on your canvas to edit it."}</p>
             <details
