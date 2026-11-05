@@ -1,0 +1,239 @@
+.export-dialog-backdrop {
+  position: fixed;
+  z-index: 35;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(13, 24, 19, 0.62);
+}
+
+.export-dialog {
+  width: min(440px, 100%);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  border: 1px solid #e0e6df;
+  border-radius: 14px;
+  background: #f8faf8;
+  color: #20352b;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.export-dialog button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid #d6dfd8;
+  border-radius: 8px;
+  background: #fff;
+  color: #294437;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.export-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 17px 20px;
+  border-bottom: 1px solid #e3e9e3;
+  background: #fff;
+}
+
+.export-dialog-header span {
+  color: #9a7a3d;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.export-dialog-header h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+.export-dialog .export-dialog-close {
+  width: 40px;
+  padding: 0;
+  font-size: 22px;
+}
+
+.export-format-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin: 18px 20px 14px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #eaf0eb;
+}
+
+.export-dialog .export-format-switch button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.export-dialog .export-format-switch button.is-active {
+  border-color: #dce5dc;
+  background: #fff;
+  color: #176b4d;
+  box-shadow: 0 1px 3px rgba(25, 42, 32, 0.08);
+}
+
+.export-background-options {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 20px;
+  border: 0;
+}
+
+.export-background-options legend {
+  margin-bottom: 10px;
+  padding: 0;
+  color: #405248;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.export-background-option {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px;
+  border: 1px solid #e0e6df;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.export-background-option.is-selected {
+  border-color: #4a8d70;
+  background: #f2f8f3;
+  box-shadow: 0 0 0 1px rgba(23, 107, 77, 0.14);
+}
+
+.export-background-option.is-unavailable {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.export-background-option > input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #176b4d;
+}
+
+.export-background-preview {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #d6dfd8;
+  border-radius: 7px;
+  background: #fff;
+  color: #7a867d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.export-background-preview.is-checkerboard {
+  background-color: #fff;
+  background-image: linear-gradient(45deg, #cbd4cc 25%, transparent 25%), linear-gradient(-45deg, #cbd4cc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cbd4cc 75%), linear-gradient(-45deg, transparent 75%, #cbd4cc 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.export-background-preview.is-checkerboard > span {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: 50%;
+  background: rgba(255,255,255,.82);
+  color: #176b4d;
+}
+
+.export-background-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.export-background-copy strong {
+  font-size: 12px;
+}
+
+.export-background-copy small {
+  color: #7b887e;
+  font-size: 10px;
+}
+
+.export-custom-color {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  color: #536258;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.export-custom-color input {
+  width: 42px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.export-dialog-note {
+  margin: 13px 20px 0;
+  color: #738077;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.export-dialog-footer {
+  display: flex;
+  justify-content: end;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 20px;
+  border-top: 1px solid #e3e9e3;
+  background: #fff;
+}
+
+.export-dialog .export-dialog-primary {
+  border-color: #176b4d;
+  background: #176b4d;
+  color: #fff;
+}
+
+@media (max-width: 600px) {
+  .export-dialog-backdrop {
+    align-items: end;
+    padding: 8px;
+  }
+
+  .export-dialog {
+    width: 100%;
+    border-radius: 14px 14px 10px 10px;
+  }
+
+  .export-background-option {
+    min-height: 68px;
+  }
+
+  .export-dialog-footer button {
+    min-height: 46px;
+  }
+}

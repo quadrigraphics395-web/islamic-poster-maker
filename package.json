@@ -1,0 +1,31 @@
+{
+  "name": "islamic-poster-maker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "oxlint",
+    "test:geometry": "node --test src/utils/objectGeometry.test.js",
+    "test:vector": "node --test src/utils/vectorGeometry.test.js",
+    "test:templates": "node --test src/utils/templateStorage.test.js",
+    "test:background": "node --test src/utils/backgroundRemoval.test.js",
+    "test:projects": "node --test src/utils/projectStorage.test.js",
+    "test:hadith": "node --test src/data/hadith/importBukhari.test.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "polygon-clipping": "^0.15.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "svg-path-parser": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "vite": "^8.3.0"
+  }
+}

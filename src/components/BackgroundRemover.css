@@ -1,0 +1,473 @@
+.background-remover-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(13, 24, 19, 0.72);
+}
+
+.background-remover {
+  width: min(1440px, 100%);
+  height: min(900px, 100%);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #dfe6df;
+  border-radius: 12px;
+  background: #f7f9f6;
+  color: #23372d;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+}
+
+.background-remover button {
+  min-height: 40px;
+  border: 1px solid #d7dfd8;
+  border-radius: 7px;
+  background: #fff;
+  color: #294437;
+  font: inherit;
+  cursor: pointer;
+}
+
+.background-remover button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.background-remover-header {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #e0e6df;
+  background: #fff;
+}
+
+.background-remover-header > div:first-child {
+  flex: 1;
+}
+
+.background-remover-header > div:first-child > span,
+.background-remover-panel-title {
+  color: #8a7956;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.background-remover-header h2 {
+  margin: 3px 0 0;
+  color: #20352b;
+  font-size: 18px;
+}
+
+.background-remover-zoom {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.background-remover-zoom button {
+  min-width: 40px;
+  padding: 0 10px;
+  font-size: 14px;
+}
+
+.background-remover-zoom span {
+  min-width: 48px;
+  color: #647269;
+  font-size: 12px;
+  text-align: center;
+}
+
+.background-remover-close {
+  width: 42px;
+  font-size: 23px !important;
+}
+
+.background-remover-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) 270px;
+}
+
+.background-remover-tools,
+.background-remover-settings {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow-y: auto;
+  padding: 17px 13px;
+  background: #fff;
+}
+
+.background-remover-tools {
+  border-right: 1px solid #e0e6df;
+}
+
+.background-remover-tools button {
+  width: 100%;
+  text-align: left;
+  padding: 0 11px;
+}
+
+.background-remover-tools button.is-active,
+.background-remover-mode button.is-active {
+  border-color: #176b4d;
+  background: #eaf3ed;
+  color: #14583e;
+}
+
+.background-remover-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 18px;
+  overscroll-behavior: contain;
+  background-color: #e7ebe7;
+  background-image: linear-gradient(45deg, #cdd4ce 25%, transparent 25%), linear-gradient(-45deg, #cdd4ce 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cdd4ce 75%), linear-gradient(-45deg, transparent 75%, #cdd4ce 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  touch-action: pan-x pan-y;
+}
+
+.background-remover-canvas-stack {
+  position: relative;
+  margin: auto;
+  flex: none;
+  box-shadow: 0 5px 25px rgba(18, 35, 25, 0.24);
+}
+
+.background-remover-image-canvas,
+.background-remover-selection-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  max-width: none;
+  max-height: none;
+}
+
+.background-remover-image-canvas {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.background-remover-selection-canvas {
+  pointer-events: none;
+}
+
+.background-remover-busy,
+.background-remover-error {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  max-width: calc(100% - 28px);
+  transform: translateX(-50%);
+  padding: 9px 13px;
+  border-radius: 7px;
+  background: #20352b;
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+}
+
+.background-remover-error {
+  background: #8c3026;
+}
+
+.background-remover-settings {
+  border-left: 1px solid #e0e6df;
+}
+
+.background-remover-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+.background-remover-mode button {
+  min-height: 44px;
+  padding: 5px;
+  font-size: 11px;
+}
+
+.background-remover-control {
+  display: grid;
+  gap: 8px;
+  color: #46564b;
+  font-size: 12px;
+}
+
+.background-remover-control span,
+.background-remover-swatches-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.background-remover-control strong {
+  color: #176b4d;
+  font-weight: 700;
+}
+
+.background-remover-control input[type="range"] {
+  width: 100%;
+  min-height: 28px;
+  accent-color: #176b4d;
+}
+
+.background-remover-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  color: #46564b;
+  font-size: 12px;
+}
+
+.background-remover-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: #176b4d;
+}
+
+.background-remover-swatches-heading {
+  color: #46564b;
+  font-size: 12px;
+}
+
+.background-remover-swatches-heading button {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.background-remover-swatches {
+  min-height: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.background-remover-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px;
+  border: 1px solid #dce2dc;
+  border-radius: 20px;
+  background: #fff;
+}
+
+.background-remover-swatch i {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 50%;
+}
+
+.background-remover-swatch button {
+  width: 24px;
+  min-height: 24px;
+  border: 0;
+  padding: 0;
+  font-size: 16px;
+}
+
+.background-remover-empty,
+.background-remover-resolution {
+  color: #7d897f;
+  font-size: 11px;
+}
+
+.background-remover-delete {
+  border-color: #176b4d !important;
+  background: #176b4d !important;
+  color: #fff !important;
+  font-size: 12px !important;
+}
+
+.background-remover-deselect {
+  min-height: 36px !important;
+}
+
+.background-remover-resolution {
+  margin-top: auto;
+}
+
+.background-remover-footer {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 18px;
+  border-top: 1px solid #e0e6df;
+  background: #fff;
+}
+
+.background-remover-footer > span {
+  color: #758178;
+  font-size: 11px;
+}
+
+.background-remover-footer > div {
+  display: flex;
+  gap: 9px;
+}
+
+.background-remover-footer button {
+  min-width: 118px;
+  min-height: 44px;
+  padding: 0 13px;
+}
+
+.background-remover-footer .background-remover-apply {
+  border-color: #176b4d;
+  background: #176b4d;
+  color: #fff;
+}
+
+@media (max-width: 850px) {
+  .background-remover-backdrop {
+    padding: 0;
+  }
+
+  .background-remover {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .background-remover-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .background-remover-tools {
+    position: absolute;
+    z-index: 2;
+    left: 8px;
+    top: 82px;
+    width: min(150px, 38vw);
+    max-height: 42%;
+    border: 1px solid #dfe6df;
+    border-radius: 9px;
+    box-shadow: 0 5px 18px rgba(18, 35, 25, 0.18);
+  }
+
+  .background-remover-canvas-wrap {
+    grid-row: 1;
+    padding: 12px;
+  }
+
+  .background-remover-settings {
+    max-height: 34vh;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 8px 12px;
+    padding: 12px 14px;
+    border-top: 1px solid #e0e6df;
+    border-left: 0;
+  }
+
+  .background-remover-settings > .background-remover-panel-title,
+  .background-remover-settings > .background-remover-swatches-heading,
+  .background-remover-settings > .background-remover-swatches,
+  .background-remover-settings > .background-remover-delete,
+  .background-remover-settings > .background-remover-deselect,
+  .background-remover-settings > .background-remover-resolution {
+    grid-column: 1 / -1;
+  }
+
+  .background-remover-footer {
+    min-height: 66px;
+  }
+
+  .background-remover-footer > span {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .background-remover-header {
+    min-height: 58px;
+    gap: 8px;
+    padding: 6px 9px;
+  }
+
+  .background-remover-header h2 {
+    font-size: 15px;
+  }
+
+  .background-remover-header > div:first-child > span {
+    font-size: 8px;
+  }
+
+  .background-remover-zoom {
+    gap: 3px;
+  }
+
+  .background-remover-zoom button {
+    min-width: 36px;
+    min-height: 38px;
+    padding: 0 7px;
+    font-size: 12px;
+  }
+
+  .background-remover-zoom span {
+    min-width: 38px;
+    font-size: 10px;
+  }
+
+  .background-remover-close {
+    width: 38px;
+    min-width: 38px;
+  }
+
+  .background-remover-tools {
+    top: 66px;
+    width: 124px;
+    gap: 6px;
+    padding: 9px;
+  }
+
+  .background-remover-tools button {
+    min-height: 42px;
+    padding: 0 7px;
+    font-size: 11px;
+  }
+
+  .background-remover-settings {
+    max-height: 36vh;
+    padding: 10px;
+  }
+
+  .background-remover-footer {
+    min-height: 62px;
+    padding: 7px 10px;
+  }
+
+  .background-remover-footer > div {
+    width: 100%;
+  }
+
+  .background-remover-footer button {
+    flex: 1;
+    min-width: 0;
+    min-height: 46px;
+  }
+}
