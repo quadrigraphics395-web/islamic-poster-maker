@@ -2975,7 +2975,7 @@ function deletePage(pageId) {
           <button className="back-btn" onClick={() => setEditor(false)}>← Back</button>
           <div className="editor-brand"><span className="logo">🕌</span><div><strong>Qadri Islamic Poster</strong><small>{activeProjectName || templateName}</small></div></div>
           <nav className="editor-menu-bar" aria-label="Editor actions">
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-add" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>＋</span>Add</summary>
               <div className="editor-menu-panel">
                 <button type="button" onClick={addText}>Add Text</button>
@@ -2984,7 +2984,7 @@ function deletePage(pageId) {
                 <button type="button" onClick={() => backgroundUploadRef.current?.click()}>Background Image</button>
               </div>
             </details>
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-edit" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>✎</span>Edit</summary>
               <div className="editor-menu-panel">
                 {selectedObject?.type === "image" && <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit Image / Background Remover</button>}
@@ -2996,7 +2996,7 @@ function deletePage(pageId) {
                 }}>Delete Selected</button>
               </div>
             </details>
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-vector" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>⌘</span>Vector</summary>
               <div className="editor-menu-panel editor-menu-panel-wide vector-menu-panel">
                 <div className="vector-tool-row">
@@ -3051,7 +3051,7 @@ function deletePage(pageId) {
                 {vectorMessage && <p className="vector-message" role="status">{vectorMessage}</p>}
               </div>
             </details>
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-arrange" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>↕</span>Arrange</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <label htmlFor="toolbar-canvas-layers">Layers</label>
@@ -3096,7 +3096,7 @@ function deletePage(pageId) {
                 </>}
               </div>
             </details>
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-project" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>▣</span>Project</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <button type="button" onClick={createNewProject}>New Project</button>
@@ -3118,7 +3118,7 @@ function deletePage(pageId) {
                 ))}
               </div>
             </details>
-            <details className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-more" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>⋯</span>More</summary>
               <div className="editor-menu-panel">
                 <button type="button" disabled={!history.length} onClick={undo}>Undo</button>
@@ -3128,6 +3128,9 @@ function deletePage(pageId) {
                 <button type="button" onClick={resetPoster}>Clear / Reset Poster</button>
               </div>
             </details>
+            <button type="button" className="mobile-tools-close" aria-label="Close tool panel" onClick={() => {
+              document.querySelectorAll(".editor-menu[open]").forEach((menu) => { menu.open = false; });
+            }}>×</button>
           </nav>
           <div className="export-actions">
             <button type="button" onClick={() => openExport("jpg")}>JPG</button>
