@@ -2715,10 +2715,14 @@ function deletePage(pageId) {
       context.rect(0, 0, output.width, output.height);
       context.clip();
       outputObjects.forEach((object) => {
-        const objectLayer = document.createElement("canvas");
-        objectLayer.width = output.width;
-        objectLayer.height = output.height;
-        const context = objectLayer.getContext("2d");
+        const masks = [...(object.transparencyMasks ?? []), ...(object.transparencyMask ? [object.transparencyMask] : [])];
+        const needsLayer = (object.opacity ?? 100) < 100 || masks.length > 0 || (object.type === "image" && object.alphaMask?.paths?.length);
+        const objectLayer = needsLayer ? document.createElement("canvas") : null;
+        if (objectLayer) {
+          objectLayer.width = output.width;
+          objectLayer.height = output.height;
+        }
+        const context = objectLayer ? objectLayer.getContext("2d") : posterContext;
         const x = (object.x / 100) * output.width;
         const y = (object.y / 100) * output.height;
         if (object.type === "text") {
@@ -2804,7 +2808,6 @@ function deletePage(pageId) {
           context.fill(new Path2D(pathToSvg(object.alphaMask.paths)), "evenodd");
           context.restore();
         }
-        const masks = [...(object.transparencyMasks ?? []), ...(object.transparencyMask ? [object.transparencyMask] : [])];
         if (masks.length) {
           const content = canvasRef.current.querySelector(`.canvas-control-object[data-object-id="${CSS.escape(String(object.id))}"] .canvas-object-content`);
           let maskWidth = (content?.offsetWidth ?? canvasRef.current.clientWidth * 0.4) * scaleX;
@@ -2859,10 +2862,12 @@ function deletePage(pageId) {
           });
           context.restore();
         }
-        posterContext.save();
-        posterContext.globalAlpha = (object.opacity ?? 100) / 100;
-        posterContext.drawImage(objectLayer, 0, 0);
-        posterContext.restore();
+        if (objectLayer) {
+          posterContext.save();
+          posterContext.globalAlpha = (object.opacity ?? 100) / 100;
+          posterContext.drawImage(objectLayer, 0, 0);
+          posterContext.restore();
+        }
       });
       posterContext.restore();
       if (onRendered) {
@@ -2874,12 +2879,30 @@ function deletePage(pageId) {
         onRendered(preview.toDataURL("image/png"));
         return;
       }
-      const link = document.createElement("a");
-      link.download = `islamic-poster.${format}`;
-      link.href = output.toDataURL(format === "jpg" ? "image/jpeg" : "image/png", 0.92);
-      document.body.append(link);
-      link.click();
-      link.remove();
+      const mime = format === "jpg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+      output.toBlob((blob) => {
+        if (!blob) {
+          const error = new Error("The poster could not be encoded. Try a smaller canvas size.");
+          if (onError) onError(error);
+          else window.alert(error.message);
+          return;
+        }
+        if (blob.type !== mime) {
+          const error = new Error(`${format.toUpperCase()} export is not supported by this browser. Choose PNG or JPG instead.`);
+          if (onError) onError(error);
+          else window.alert(error.message);
+          return;
+        }
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.download = `islamic-poster.${format}`;
+        link.href = url;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        if (typeof exportBackground.onComplete === "function") exportBackground.onComplete({ size: blob.size, format });
+      }, mime, format === "png" ? undefined : (exportBackground.quality ?? 0.85));
     }).catch((renderError) => {
       const error = new Error(`Poster preview or export could not be rendered: ${renderError.message || "unknown rendering error"}`);
       if (onError) {
@@ -3121,8 +3144,6 @@ function deletePage(pageId) {
             <details id="editor-menu-more" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary onClick={toggleEditorMenu}><span>⋯</span>More</summary>
               <div className="editor-menu-panel">
-                <button type="button" disabled={!history.length} onClick={undo}>Undo</button>
-                <button type="button" disabled={!redoStack.length} onClick={redo}>Redo</button>
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
                 <label className="editor-menu-color"><span>Background color</span><input aria-label="Background color" type="color" value={background} onChange={(event) => { setBackground(event.target.value); setBackgroundMode("solid"); }} /></label>
                 <button type="button" onClick={resetPoster}>Clear / Reset Poster</button>
@@ -3132,6 +3153,10 @@ function deletePage(pageId) {
               document.querySelectorAll(".editor-menu[open]").forEach((menu) => { menu.open = false; });
             }}>×</button>
           </nav>
+          <div className="history-actions" aria-label="Edit history">
+            <button type="button" aria-label="Undo" title="Undo (Ctrl/Cmd+Z)" disabled={!history.length && !pathDraft?.length} onClick={undo}><span aria-hidden="true">↶</span><span className="history-action-label">Undo</span></button>
+            <button type="button" aria-label="Redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled={!redoStack.length} onClick={redo}><span aria-hidden="true">↷</span><span className="history-action-label">Redo</span></button>
+          </div>
           <div className="export-actions">
             <button type="button" onClick={() => openExport("jpg")}>JPG</button>
             <button type="button" className="export-primary" onClick={() => openExport("png")}>Export PNG</button>

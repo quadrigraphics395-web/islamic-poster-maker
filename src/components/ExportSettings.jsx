@@ -12,6 +12,10 @@ export default function ExportSettings({ initialFormat, onExport, onClose }) {
   const [format, setFormat] = useState(initialFormat);
   const [background, setBackground] = useState("poster");
   const [customColor, setCustomColor] = useState("#ffffff");
+  const [quality, setQuality] = useState("balanced");
+  const [result, setResult] = useState("");
+  const [busy, setBusy] = useState(false);
+  const qualities = { high: 0.88, balanced: 0.85, small: 0.82 };
 
   return (
     <div className="export-dialog-backdrop" onMouseDown={(event) => {
@@ -27,7 +31,7 @@ export default function ExportSettings({ initialFormat, onExport, onClose }) {
         </header>
 
         <div className="export-format-switch" role="group" aria-label="Export format">
-          {["png", "jpg"].map((item) => (
+          {["png", "jpg", "webp"].map((item) => (
             <button
               key={item}
               type="button"
@@ -42,6 +46,13 @@ export default function ExportSettings({ initialFormat, onExport, onClose }) {
             </button>
           ))}
         </div>
+
+        {format !== "png" && <fieldset className="export-quality-options">
+          <legend>Quality</legend>
+          {[["high", "High Quality"], ["balanced", "Balanced"], ["small", "Smaller File Size"]].map(([value, label]) => (
+            <label key={value}><input type="radio" name="export-quality" value={value} checked={quality === value} onChange={() => setQuality(value)} />{label}</label>
+          ))}
+        </fieldset>}
 
         <fieldset className="export-background-options">
           <legend>Poster background</legend>
@@ -79,7 +90,7 @@ export default function ExportSettings({ initialFormat, onExport, onClose }) {
 
         <p className="export-dialog-note">
           {background === "transparent"
-            ? "Only the exported PNG background becomes transparent. Your poster and saved project background stay unchanged."
+            ? `Only the exported ${format.toUpperCase()} background becomes transparent. Your poster and saved project background stay unchanged.`
             : background === "poster"
               ? "The current poster background and its styling will be preserved."
             : "This export background does not change your poster design or saved project."}
@@ -89,14 +100,30 @@ export default function ExportSettings({ initialFormat, onExport, onClose }) {
           <button
             type="button"
             className="export-dialog-primary"
-            onClick={() => {
-              onExport(format, { mode: background, color: customColor });
-              onClose();
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setResult("");
+              try {
+                const exported = await new Promise((resolve, reject) => onExport(format, {
+                  mode: background,
+                  color: customColor,
+                  quality: qualities[quality],
+                  onComplete: resolve,
+                }, null, reject));
+                const actualFormat = exported?.format?.toUpperCase() ?? format.toUpperCase();
+                setResult(exported?.size ? `Exported ${actualFormat}: ${(exported.size / 1024 / 1024).toFixed(2)} MB` : "Export complete.");
+              } catch (error) {
+                setResult(error.message || "Export failed.");
+              } finally {
+                setBusy(false);
+              }
             }}
           >
-            Export {format.toUpperCase()}
+            {busy ? "Exporting…" : `Export ${format.toUpperCase()}`}
           </button>
         </footer>
+        {result && <p className="export-result" role="status">{result}</p>}
       </section>
     </div>
   );

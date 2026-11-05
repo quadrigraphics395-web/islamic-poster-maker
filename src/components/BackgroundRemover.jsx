@@ -4,11 +4,12 @@ import {
   paintAlpha,
   removeSelectedPixels,
 } from "../utils/backgroundRemoval.js";
+import { getWorkingImageDimensions } from "../utils/imageProcessing.js";
 import "./BackgroundRemover.css";
 
 const HISTORY_LIMIT = 12;
 const HISTORY_BYTE_LIMIT = 32 * 1024 * 1024;
-const MAX_IMAGE_PIXELS = 12_000_000;
+const WORKING_MAX_PIXELS = 5_000_000;
 
 function decodeImage(source) {
   return new Promise((resolve, reject) => {
@@ -54,6 +55,8 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
   const undoRef = useRef([]);
   const redoRef = useRef([]);
   const dimensionsRef = useRef(null);
+  const originalImageRef = useRef(null);
+  const workingDimensionsRef = useRef(null);
   const [dimensions, setDimensions] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [mode, setMode] = useState("contiguous");
@@ -120,32 +123,35 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
     decodeImage(imageSrc).then((image) => {
       if (!active) return;
       const { naturalWidth: width, naturalHeight: height } = image;
-      if (!width || !height || width * height > MAX_IMAGE_PIXELS) {
-        throw new Error("This image is too large to edit safely in your browser (maximum 12 megapixels).");
-      }
+      if (!width || !height) throw new Error("This image has invalid dimensions.");
+      originalImageRef.current = image;
+      const mobile = window.matchMedia("(max-width: 700px)").matches || (navigator.deviceMemory && navigator.deviceMemory <= 4);
+      const pixelLimit = mobile ? 2_000_000 : WORKING_MAX_PIXELS;
+      const { width: workWidth, height: workHeight } = getWorkingImageDimensions(width, height, pixelLimit);
       const canvas = canvasRef.current;
       const overlay = overlayRef.current;
       if (!canvas || !overlay) return;
-      canvas.width = width;
-      canvas.height = height;
-      overlay.width = width;
-      overlay.height = height;
+      canvas.width = workWidth;
+      canvas.height = workHeight;
+      overlay.width = workWidth;
+      overlay.height = workHeight;
       const context = canvas.getContext("2d", { willReadFrequently: true });
-      context.drawImage(image, 0, 0);
-      const original = context.getImageData(0, 0, width, height);
+      context.drawImage(image, 0, 0, workWidth, workHeight);
+      const original = context.getImageData(0, 0, workWidth, workHeight);
       originalDataRef.current = new ImageData(
         new Uint8ClampedArray(original.data),
-        width,
-        height,
+        workWidth,
+        workHeight,
       );
-      imageDataRef.current = new ImageData(new Uint8ClampedArray(original.data), width, height);
+      imageDataRef.current = new ImageData(new Uint8ClampedArray(original.data), workWidth, workHeight);
+      workingDimensionsRef.current = { width: workWidth, height: workHeight };
       dimensionsRef.current = { width, height };
       setDimensions({ width, height });
       setBusy(false);
       requestAnimationFrame(() => fitImage({ width, height }));
     }).catch((loadError) => {
       if (active) {
-        setError(loadError.message || "The selected image could not be opened.");
+        setError(loadError.message || "The image could not be decoded. Try a PNG, JPEG, or WebP image.");
         setBusy(false);
       }
     });
@@ -382,8 +388,35 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
     setBusy(true);
     setError("");
     try {
+      let outputCanvas = canvas;
+      const source = originalImageRef.current;
+      const originalSize = dimensionsRef.current;
+      const workingSize = workingDimensionsRef.current;
+      if (source && originalSize && workingSize && (originalSize.width !== workingSize.width || originalSize.height !== workingSize.height)) {
+        outputCanvas = document.createElement("canvas");
+        outputCanvas.width = originalSize.width;
+        outputCanvas.height = originalSize.height;
+        const outputContext = outputCanvas.getContext("2d");
+        outputContext.drawImage(source, 0, 0, originalSize.width, originalSize.height);
+        const alphaCanvas = document.createElement("canvas");
+        alphaCanvas.width = workingSize.width;
+        alphaCanvas.height = workingSize.height;
+        const alphaContext = alphaCanvas.getContext("2d");
+        const alphaPixels = alphaContext.createImageData(workingSize.width, workingSize.height);
+        const edited = imageDataRef.current.data;
+        for (let pixel = 0; pixel < edited.length; pixel += 4) {
+          alphaPixels.data[pixel] = 255;
+          alphaPixels.data[pixel + 1] = 255;
+          alphaPixels.data[pixel + 2] = 255;
+          alphaPixels.data[pixel + 3] = edited[pixel + 3];
+        }
+        alphaContext.putImageData(alphaPixels, 0, 0);
+        outputContext.globalCompositeOperation = "destination-in";
+        outputContext.imageSmoothingEnabled = true;
+        outputContext.drawImage(alphaCanvas, 0, 0, originalSize.width, originalSize.height);
+      }
       const blob = await new Promise((resolve, reject) => {
-        canvas.toBlob((result) => {
+        outputCanvas.toBlob((result) => {
           if (result) resolve(result);
           else reject(new Error("Could not encode the edited image as a transparent PNG."));
         }, "image/png");
@@ -402,7 +435,9 @@ export default function BackgroundRemover({ imageSrc, onApply, onCancel }) {
       };
       reader.readAsDataURL(blob);
     } catch (applyError) {
-      setError(applyError.message || "Could not apply the image edits.");
+      setError(applyError.name === "SecurityError"
+        ? "The browser could not read this image's pixels. Try opening a PNG, JPEG, or WebP copy."
+        : applyError.message || "Could not create the transparent PNG. This image may exceed available browser memory.");
       setBusy(false);
     }
   }

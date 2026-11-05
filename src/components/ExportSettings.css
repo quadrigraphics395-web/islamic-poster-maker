@@ -61,13 +61,46 @@
 
 .export-format-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 5px;
   margin: 18px 20px 14px;
   padding: 4px;
   border-radius: 10px;
   background: #eaf0eb;
 }
+
+.export-quality-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 20px 14px;
+  padding: 0;
+  border: 0;
+}
+
+.export-quality-options legend {
+  width: 100%;
+  margin-bottom: 7px;
+  color: #405248;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.export-quality-options label {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid #e0e6df;
+  border-radius: 8px;
+  background: #fff;
+  color: #405248;
+  font-size: 11px;
+}
+
+.export-quality-options input { accent-color: #176b4d; }
+.export-result { margin: 0 20px 14px; color: #176b4d; font-size: 12px; }
 
 .export-dialog .export-format-switch button {
   border-color: transparent;

@@ -11,6 +11,7 @@
     "test:vector": "node --test src/utils/vectorGeometry.test.js",
     "test:templates": "node --test src/utils/templateStorage.test.js",
     "test:background": "node --test src/utils/backgroundRemoval.test.js",
+    "test:images": "node --test src/utils/imageProcessing.test.js",
     "test:projects": "node --test src/utils/projectStorage.test.js",
     "test:hadith": "node --test src/data/hadith/importBukhari.test.js",
     "preview": "vite preview"

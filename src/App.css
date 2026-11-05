@@ -1262,6 +1262,38 @@ footer {
   gap: 7px;
 }
 
+.history-actions {
+  display: flex;
+  flex: none;
+  gap: 5px;
+}
+
+.editor-topbar .history-actions button {
+  min-width: 68px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid #dce2dc;
+  border-radius: 7px;
+  background: #fff;
+  color: #294437;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editor-topbar .history-actions button > span:first-child {
+  font-size: 20px;
+}
+
+.editor-topbar .history-actions button:disabled {
+  opacity: .42;
+  cursor: default;
+}
+
 .editor-topbar .export-actions button {
   min-height: 38px;
   padding: 0 12px;
@@ -2562,6 +2594,15 @@ footer {
     padding: 0 9px;
     font-size: 12px;
   }
+
+  .history-actions { gap: 4px; }
+  .editor-topbar .history-actions button {
+    min-width: 42px;
+    min-height: 42px;
+    padding: 0 7px;
+  }
+
+  .editor-topbar .history-action-label { display: none; }
 
   .editor-brand {
     min-width: 0;
