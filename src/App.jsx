@@ -31,6 +31,7 @@ const fontOptions = [
   { label: "Times New Roman", value: '"Times New Roman", serif' },
 ];
 const proportionalShapeIds = new Set(["circle", "circle-outline", "square", "circle-ornament"]);
+const COMPACT_EDITOR_QUERY = "(max-width: 600px), (min-width: 601px) and (max-width: 900px) and (max-height: 500px)";
 
 const textEffectDefaults = {
   color: "#17352c",
@@ -482,6 +483,9 @@ function App() {
   const [background, setBackground] = useState("#17352c");
   const [backgroundMode, setBackgroundMode] = useState("solid");
   const [shapePickerOpen, setShapePickerOpen] = useState(false);
+  const [backgroundPanelOpen, setBackgroundPanelOpen] = useState(() => (
+    typeof window === "undefined" || !window.matchMedia(COMPACT_EDITOR_QUERY).matches
+  ));
   const [backgroundImage, setBackgroundImage] = useState(null);
   const [backgroundGradientColors, setBackgroundGradientColors] = useState(["#10261f", "#31704b", "#ddbf72"]);
   const [backgroundGradientThirdEnabled, setBackgroundGradientThirdEnabled] = useState(false);
@@ -591,6 +595,12 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const dragRef = useRef(null);
   const shapeIdRef = useRef(0);
   const pathDraftRef = useRef(null);
+  useEffect(() => {
+    const compactEditor = window.matchMedia(COMPACT_EDITOR_QUERY);
+    const syncBackgroundPanel = () => setBackgroundPanelOpen(!compactEditor.matches);
+    compactEditor.addEventListener("change", syncBackgroundPanel);
+    return () => compactEditor.removeEventListener("change", syncBackgroundPanel);
+  }, []);
   function changePathDraft(nextOrUpdate) {
     const next = typeof nextOrUpdate === "function" ? nextOrUpdate(pathDraftRef.current) : nextOrUpdate;
     pathDraftRef.current = next;
@@ -2541,7 +2551,9 @@ function deletePage(pageId) {
     window.setTimeout(() => {
       if (!activeSection.open) return;
       activeSection.parentElement.querySelectorAll(".text-section[open]").forEach((section) => {
-        if (section !== activeSection) section.open = false;
+        if (section === activeSection) return;
+        if (section.classList.contains("background-properties")) setBackgroundPanelOpen(false);
+        else section.open = false;
       });
     }, 0);
   }
@@ -3016,6 +3028,7 @@ function deletePage(pageId) {
                 <button type="button" onClick={addText}>Add Text</button>
                 <button type="button" onClick={() => uploadRef.current?.click()}>{selectedObject?.type === "image" ? "Replace Image" : "Upload Image"}</button>
                 <button type="button" onClick={() => setShapePickerOpen(true)}>Add Shape</button>
+                <button type="button" onClick={() => { setActiveTool("pen"); changePathDraft(null); }}>Custom Shape (Pen)</button>
                 <button type="button" onClick={() => backgroundUploadRef.current?.click()}>Background Image</button>
               </div>
             </details>
@@ -3213,7 +3226,11 @@ function deletePage(pageId) {
           <aside className="properties-panel" onClick={togglePropertyAccordion}>
             <h2>{selectedObject ? `${selectedObject.type === "text" ? "Text" : selectedObject.type === "image" ? "Image" : selectedObject.type === "group" ? "Group" : "Shape"} Properties` : "Design & Background"}</h2>
             <p className="panel-hint">{selectedIds.length > 1 ? `${selectedIds.length} objects selected.` : "Select an element on your canvas to edit it."}</p>
-            <details className="text-section background-properties" open>
+            <details
+              className="text-section background-properties"
+              open={backgroundPanelOpen}
+              onToggle={(event) => setBackgroundPanelOpen(event.currentTarget.open)}
+            >
               <summary>Background</summary>
               <label className="field-label" htmlFor="background-mode">Type</label>
               <select id="background-mode" className="font-select" value={backgroundMode} onChange={(event) => setBackgroundMode(event.target.value)}>

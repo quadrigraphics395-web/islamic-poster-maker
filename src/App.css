@@ -3364,3 +3364,130 @@ body {
     padding-inline: 9px;
   }
 }
+
+/* Compact portrait and landscape editor navigation */
+@media (max-width: 600px) {
+  .editor-menu-bar {
+    justify-content: space-between;
+    overflow: visible;
+    overscroll-behavior: auto;
+  }
+
+  .editor-menu {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .editor-menu > summary {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 1px;
+    font-size: clamp(8px, 2.45vw, 10px);
+  }
+
+  .mobile-tools-close {
+    width: 30px;
+    min-width: 30px;
+    flex: 0 0 30px;
+    padding: 0;
+  }
+
+  .editor-menu-panel {
+    z-index: 30;
+    max-height: min(48dvh, 420px, calc(100dvh - 180px - env(safe-area-inset-bottom)));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .editor-menu-panel button,
+  .editor-menu-panel select {
+    flex: 0 0 auto;
+  }
+
+  .editor-workspace {
+    grid-template-rows: minmax(0, 1fr) minmax(96px, 22dvh);
+  }
+
+  .properties-panel {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .shape-picker-backdrop {
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+  }
+
+  .shape-picker {
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .shape-picker-grid {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 900px) and (max-height: 500px) {
+  .editor-topbar {
+    min-height: 0;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 4px 7px;
+    padding: 4px 8px;
+  }
+
+  .editor-topbar .back-btn {
+    order: 1;
+  }
+
+  .editor-brand {
+    min-width: 120px;
+    flex: 1 1 125px;
+    order: 2;
+  }
+
+  .editor-topbar .history-actions {
+    margin-left: auto;
+    order: 3;
+  }
+
+  .editor-topbar .export-actions {
+    order: 4;
+  }
+
+  .editor-menu-bar {
+    min-height: 42px;
+    flex: 1 1 100%;
+    order: 5;
+    justify-content: space-between;
+    gap: 2px;
+    overflow: visible;
+  }
+
+  .editor-menu {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .editor-menu > summary {
+    min-width: 0;
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 3px;
+    font-size: 9px;
+  }
+
+  .mobile-tools-close {
+    display: none;
+  }
+
+  .editor-menu-panel {
+    max-height: min(70dvh, calc(100dvh - 105px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
