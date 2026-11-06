@@ -1294,6 +1294,20 @@ footer {
   cursor: default;
 }
 
+.editor-topbar .history-actions .delete-selected-action {
+  color: #a3483d;
+}
+
+.delete-selected-action svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .editor-topbar .export-actions button {
   min-height: 38px;
   padding: 0 12px;
@@ -1576,6 +1590,14 @@ footer {
   transform-origin: center;
 }
 
+.effect-filter-definitions {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .canvas-object > span:not(.canvas-shape) {
   display: block;
   width: min(72vw, 560px);
@@ -1788,6 +1810,59 @@ footer {
   color: #294437;
   font: inherit;
   font-size: 13px;
+}
+
+.font-search {
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 8px;
+}
+
+.font-preview {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px 0 12px;
+  padding: 8px;
+  border: 1px solid #dce7e1;
+  border-radius: 9px;
+  background: #f7faf8;
+  font-size: 20px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.font-import-button {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid #bdd5c8;
+  border-radius: 9px;
+  padding: 10px;
+  background: #eef7f1;
+  color: #176b4d;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.personal-font-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.personal-font-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.personal-font-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 6px;
 }
 
 .hex-input {

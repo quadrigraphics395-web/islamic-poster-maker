@@ -13,6 +13,9 @@ import { createTemplateRecord, deleteTemplate, readTemplates, writeTemplate } fr
 import svgPathParser from "svg-path-parser";
 import { applyBooleanGeometry, createBooleanVector, flattenVectorPath, pathToSvg, simplifyPolyline } from "./utils/vectorGeometry.js";
 import { defaultTransparencyStops, imageMaskSvg, normalizeTransparencyMask, transparencyCss } from "./utils/transparency.js";
+import { builtInFonts } from "./fontLibrary.js";
+import { deletePersonalFont, listPersonalFonts, preparePersonalFont, savePersonalFont } from "./utils/personalFonts.js";
+import { removeObjectsById, transformEffectOffset } from "./utils/objectOperations.js";
 
 const canvasSizes = {
   "Instagram Post 1080x1080": { width: 1080, height: 1080 },
@@ -24,11 +27,12 @@ const canvasSizes = {
 };
 
 const fontOptions = [
-  { label: "Naskh Arabic", value: '"Noto Naskh Arabic", "Traditional Arabic", serif' },
-  { label: "Nastaliq Urdu", value: '"Noto Nastaliq Urdu", "Noto Naskh Arabic", serif' },
-  { label: "Arial", value: "Arial, sans-serif" },
-  { label: "Georgia", value: "Georgia, serif" },
-  { label: "Times New Roman", value: '"Times New Roman", serif' },
+  ...builtInFonts.map((font) => ({ label: font.label, value: font.family, ...font })),
+  { label: "Naskh Arabic (legacy project)", value: '"Noto Naskh Arabic", "Traditional Arabic", serif', category: "Arabic", sample: "\u0628\u0650\u0633\u0652\u0645\u0650 \u0627\u0644\u0644\u064e\u0651\u0647\u0650" },
+  { label: "Nastaliq Urdu (legacy project)", value: '"Noto Nastaliq Urdu", "Noto Naskh Arabic", serif', category: "Urdu Nastaliq", sample: "\u062e\u0648\u0628\u0635\u0648\u0631\u062a \u0627\u0631\u062f\u0648" },
+  { label: "Arial (system font)", value: "Arial, sans-serif", category: "English", sample: "Beautiful Poster Design" },
+  { label: "Georgia (system font)", value: "Georgia, serif", category: "English", sample: "Beautiful Poster Design" },
+  { label: "Times New Roman (system font)", value: '"Times New Roman", serif', category: "English", sample: "Beautiful Poster Design" },
 ];
 const proportionalShapeIds = new Set(["circle", "circle-outline", "square", "circle-ornament"]);
 const COMPACT_EDITOR_QUERY = "(max-width: 600px), (min-width: 601px) and (max-width: 900px) and (max-height: 500px)";
@@ -235,12 +239,13 @@ function colorWithOpacity(color, opacity) {
 function getTextTypographyStyle(object) {
   return {
     fontSize: `${object.fontSize}px`,
-    fontWeight: object.bold ? 700 : 400,
+    fontWeight: object.fontWeight ?? (object.bold ? 700 : 400),
     fontStyle: object.italic ? "italic" : "normal",
     textAlign: object.align,
     fontFamily: object.fontFamily ?? "Arial, sans-serif",
     lineHeight: object.lineHeight ?? 1.25,
     letterSpacing: `${object.letterSpacing ?? 0}px`,
+    wordSpacing: `${object.wordSpacing ?? 0}px`,
     whiteSpace: "pre-wrap",
   };
 }
@@ -343,13 +348,14 @@ function createTextImageMask(object, image, lines, maxWidth, lineOffset, scaleX)
   mask.width = width;
   mask.height = height;
   const maskContext = mask.getContext("2d");
-  maskContext.font = `${object.italic ? "italic " : ""}${object.bold ? "bold " : ""}${fontSize}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${object.fontFamily ?? "Arial, sans-serif"}`;
   maskContext.textAlign = object.align ?? "center";
   maskContext.textBaseline = "middle";
   maskContext.direction = object.direction === "auto"
     ? (/\u0600-\u06ff/.test(object.text) ? "rtl" : "ltr")
     : object.direction ?? "ltr";
   if ("letterSpacing" in maskContext) maskContext.letterSpacing = `${(object.letterSpacing ?? 0) * scaleX}px`;
+  if ("wordSpacing" in maskContext) maskContext.wordSpacing = `${(object.wordSpacing ?? 0) * scaleX}px`;
   maskContext.fillStyle = "#ffffff";
   const textX = object.align === "left" ? 0 : object.align === "right" ? width : width / 2;
   lines.forEach((line, index) => maskContext.fillText(line, textX, fontSize + index * lineOffset));
@@ -364,19 +370,148 @@ function createTextImageMask(object, image, lines, maxWidth, lineOffset, scaleX)
   return mask;
 }
 
+function drawTextInnerShadow(context, object, lines, maxWidth, lineOffset, scaleX, anchorX) {
+  if (!object.innerShadowEnabled || !lines.length) return;
+  const fontSize = object.fontSize * scaleX;
+  const width = Math.max(1, Math.ceil(maxWidth));
+  const height = Math.max(1, Math.ceil(fontSize * 2 + (lines.length - 1) * lineOffset));
+  const mask = document.createElement("canvas");
+  mask.width = width;
+  mask.height = height;
+  const maskContext = mask.getContext("2d");
+  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  maskContext.textAlign = object.align ?? "center";
+  maskContext.textBaseline = "middle";
+  maskContext.direction = object.direction === "auto" ? (/\u0600-\u06ff/.test(object.text) ? "rtl" : "ltr") : object.direction ?? "ltr";
+  if ("letterSpacing" in maskContext) maskContext.letterSpacing = `${(object.letterSpacing ?? 0) * scaleX}px`;
+  if ("wordSpacing" in maskContext) maskContext.wordSpacing = `${(object.wordSpacing ?? 0) * scaleX}px`;
+  maskContext.fillStyle = "#fff";
+  lines.forEach((line, index) => maskContext.fillText(line, anchorX, height / 2 + (index - (lines.length - 1) / 2) * lineOffset));
+
+  const shadow = document.createElement("canvas");
+  shadow.width = width;
+  shadow.height = height;
+  const shadowContext = shadow.getContext("2d");
+  shadowContext.fillStyle = "#fff";
+  shadowContext.shadowColor = colorWithOpacity(object.innerShadowColor ?? "#000000", object.innerShadowOpacity ?? 55);
+  shadowContext.shadowBlur = (object.innerShadowBlur ?? 6) * scaleX;
+  shadowContext.shadowOffsetX = (object.innerShadowOffsetX ?? 2) * scaleX;
+  shadowContext.shadowOffsetY = (object.innerShadowOffsetY ?? 2) * scaleX;
+  lines.forEach((line, index) => shadowContext.fillText(line, anchorX, height / 2 + (index - (lines.length - 1) / 2) * lineOffset));
+  shadowContext.shadowColor = "transparent";
+  shadowContext.shadowBlur = 0;
+  shadowContext.globalCompositeOperation = "destination-out";
+  lines.forEach((line, index) => shadowContext.fillText(line, anchorX + (object.innerShadowOffsetX ?? 2) * scaleX, height / 2 + (index - (lines.length - 1) / 2) * lineOffset + (object.innerShadowOffsetY ?? 2) * scaleX));
+  shadowContext.globalCompositeOperation = "destination-in";
+  shadowContext.drawImage(mask, 0, 0);
+  context.drawImage(shadow, -width / 2, -height / 2);
+}
+
+function createImageEffectCanvas(source, object, scaleX, scaleY) {
+  const blur = Math.max(0, object.imageShadowBlur ?? 8) * Math.max(scaleX, scaleY);
+  const shadowOffset = transformEffectOffset(object, (object.imageShadowOffsetX ?? 2) * scaleX, (object.imageShadowOffsetY ?? 3) * scaleY);
+  const dx = shadowOffset.x;
+  const dy = shadowOffset.y;
+  const innerBlur = Math.max(0, object.imageInnerShadowBlur ?? 6) * Math.max(scaleX, scaleY);
+  const innerOffset = transformEffectOffset(object, (object.imageInnerShadowOffsetX ?? 2) * scaleX, (object.imageInnerShadowOffsetY ?? 2) * scaleY);
+  const innerDx = innerOffset.x;
+  const innerDy = innerOffset.y;
+  const outline = Math.max(0, object.imageOutlineWidth ?? 2) * Math.max(scaleX, scaleY);
+  const pad = Math.ceil(Math.max(
+    object.imageShadowEnabled ? blur * 2 + Math.abs(dx) + Math.abs(dy) : 0,
+    object.imageInnerShadowEnabled ? innerBlur * 2 + Math.abs(innerDx) + Math.abs(innerDy) : 0,
+    object.imageOutlineEnabled ? outline + 2 : 0,
+    2,
+  ));
+  const result = document.createElement("canvas");
+  result.width = Math.max(1, source.width + pad * 2);
+  result.height = Math.max(1, source.height + pad * 2);
+  const resultContext = result.getContext("2d");
+  const work = document.createElement("canvas");
+  work.width = result.width;
+  work.height = result.height;
+  const workContext = work.getContext("2d");
+
+  if (object.imageShadowEnabled) {
+    workContext.fillStyle = "#fff";
+    workContext.shadowColor = colorWithOpacity(object.imageShadowColor ?? "#000000", object.imageShadowOpacity ?? 55);
+    workContext.shadowBlur = blur;
+    workContext.shadowOffsetX = dx;
+    workContext.shadowOffsetY = dy;
+    workContext.drawImage(source, pad, pad);
+    workContext.shadowColor = "transparent";
+    workContext.shadowBlur = 0;
+    workContext.globalCompositeOperation = "destination-out";
+    workContext.drawImage(source, pad, pad);
+    resultContext.drawImage(work, 0, 0);
+    workContext.clearRect(0, 0, work.width, work.height);
+    workContext.globalCompositeOperation = "source-over";
+  }
+
+  if (object.imageOutlineEnabled && outline > 0) {
+    const radius = Math.max(1, outline);
+    const directions = 16;
+    for (let index = 0; index < directions; index += 1) {
+      const angle = (index * Math.PI * 2) / directions;
+      const offsetX = Math.cos(angle) * radius;
+      const offsetY = Math.sin(angle) * radius;
+      workContext.clearRect(0, 0, work.width, work.height);
+      workContext.fillStyle = "#fff";
+      if ("filter" in workContext) {
+        workContext.filter = `drop-shadow(${offsetX}px ${offsetY}px 0 ${object.imageOutlineColor ?? "#ffffff"})`;
+        workContext.drawImage(source, pad, pad);
+        workContext.filter = "none";
+      } else {
+        workContext.shadowColor = object.imageOutlineColor ?? "#ffffff";
+        workContext.shadowBlur = 0;
+        workContext.shadowOffsetX = offsetX;
+        workContext.shadowOffsetY = offsetY;
+        workContext.drawImage(source, pad, pad);
+        workContext.shadowColor = "transparent";
+        workContext.shadowOffsetX = 0;
+        workContext.shadowOffsetY = 0;
+      }
+      workContext.globalCompositeOperation = "destination-out";
+      workContext.drawImage(source, pad, pad);
+      workContext.globalCompositeOperation = "source-over";
+      resultContext.drawImage(work, 0, 0);
+    }
+  }
+
+  resultContext.drawImage(source, pad, pad);
+
+  if (object.imageInnerShadowEnabled) {
+    workContext.fillStyle = "#fff";
+    workContext.shadowColor = colorWithOpacity(object.imageInnerShadowColor ?? "#000000", object.imageInnerShadowOpacity ?? 55);
+    workContext.shadowBlur = innerBlur;
+    workContext.shadowOffsetX = innerDx;
+    workContext.shadowOffsetY = innerDy;
+    workContext.drawImage(source, pad, pad);
+    workContext.shadowColor = "transparent";
+    workContext.shadowBlur = 0;
+    workContext.globalCompositeOperation = "destination-out";
+    workContext.drawImage(source, pad + innerDx, pad + innerDy);
+    workContext.globalCompositeOperation = "destination-in";
+    workContext.drawImage(source, pad, pad);
+    resultContext.drawImage(work, 0, 0);
+  }
+  return { canvas: result, padding: pad };
+}
+
 function drawTextObject(context, object, x, y, scaleX, scaleY, maxWidth, imageFillImage = null) {
   context.save();
   context.translate(x, y);
   context.rotate(((object.rotation ?? 0) * Math.PI) / 180);
   context.scale(object.flipHorizontal ? -1 : 1, object.flipVertical ? -1 : 1);
   context.globalAlpha = (object.opacity ?? 100) / 100;
-  context.font = `${object.italic ? "italic " : ""}${object.bold ? "bold " : ""}${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  context.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
   context.textAlign = object.align ?? "center";
   context.textBaseline = "middle";
   context.direction = object.direction === "auto"
     ? (/\u0600-\u06ff/.test(object.text) ? "rtl" : "ltr")
     : object.direction ?? "ltr";
   if ("letterSpacing" in context) context.letterSpacing = `${(object.letterSpacing ?? 0) * scaleX}px`;
+  if ("wordSpacing" in context) context.wordSpacing = `${(object.wordSpacing ?? 0) * scaleX}px`;
   const lines = wrapCanvasText(context, object.text, maxWidth);
   const lineOffset = (object.lineHeight ?? 1.25) * object.fontSize * scaleX;
   const anchorX = object.align === "left" ? -maxWidth / 2 : object.align === "right" ? maxWidth / 2 : 0;
@@ -446,6 +581,7 @@ function drawTextObject(context, object, x, y, scaleX, scaleY, maxWidth, imageFi
     const imageMask = createTextImageMask(object, imageFillImage, lines, maxWidth, lineOffset, scaleX);
     if (imageMask) context.drawImage(imageMask, -maxWidth / 2, -imageMask.height / 2);
   }
+  drawTextInnerShadow(context, object, lines, maxWidth, lineOffset, scaleX, anchorX);
 
   context.restore();
 }
@@ -495,6 +631,12 @@ function App() {
   const [backgroundOverlayEnabled, setBackgroundOverlayEnabled] = useState(false);
   const [backgroundOverlayOpacity, setBackgroundOverlayOpacity] = useState(25);
   const [objects, setObjects] = useState([]);
+const [personalFonts, setPersonalFonts] = useState([]);
+const [fontSearch, setFontSearch] = useState("");
+const [fontCategory, setFontCategory] = useState("All Fonts");
+const [fontImportBusy, setFontImportBusy] = useState(false);
+const [fontNotice, setFontNotice] = useState("");
+const personalFontInputRef = useRef(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [activeTool, setActiveTool] = useState("select");
   const [pathDraft, setPathDraft] = useState(null);
@@ -524,6 +666,28 @@ function App() {
 ]);
 
 const [currentPageId, setCurrentPageId] = useState(1);
+useEffect(() => {
+  let active = true;
+  listPersonalFonts().then(async (fonts) => {
+    const restored = [];
+    for (const font of fonts) {
+      try {
+        const face = new FontFace(font.family, await font.blob.arrayBuffer(), { weight: String(font.weight ?? 400) });
+        await face.load();
+        document.fonts.add(face);
+        restored.push(font);
+      } catch {
+        // Retain unavailable records so users can see or remove them.
+        restored.push({ ...font, unavailable: true });
+      }
+    }
+    if (active) setPersonalFonts(restored);
+  }).catch(() => {
+    if (active) setFontNotice("Local font storage is unavailable in this browser.");
+  });
+  return () => { active = false; };
+}, []);
+
 useEffect(() => {
 
   const currentPage = pages.find(
@@ -801,7 +965,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       const target = targetSelector
         ? document.querySelector(targetSelector)
         : [...document.querySelectorAll(".properties-panel > .text-section")].find((item) => (
-            item.querySelector("summary")?.textContent.trim() === (selectedObject?.type === "text" ? "Text" : "Transform")
+            item.querySelector("summary")?.textContent.trim() === (selectedObject?.type === "text" ? "Text" : selectedObject?.type === "image" ? "Image Effects" : "Transform")
           ));
       document.querySelectorAll(".properties-panel > .text-section[open]").forEach((item) => {
         if (item !== target) item.open = false;
@@ -816,14 +980,6 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       if (item.id === id) return { ...item, ...updates };
       if (item.type === "group") return { ...item, children: updateObjectById(item.children ?? [], id, updates) };
       return item;
-    });
-  }
-
-  function removeObjectsById(items, ids) {
-    return items.flatMap((item) => {
-      if (ids.has(item.id)) return [];
-      if (item.type === "group") return [{ ...item, children: removeObjectsById(item.children ?? [], ids) }];
-      return [item];
     });
   }
 
@@ -1071,6 +1227,49 @@ function deletePage(pageId) {
  function updateSelected(updates) {
     setObjects((current) => updateObjectById(current, selectedId, updates));
   }
+
+ async function importPersonalFont(event) {
+   const files = [...(event.target.files ?? [])];
+   event.target.value = "";
+   if (!files.length) return;
+   setFontImportBusy(true);
+   setFontNotice("");
+   try {
+     const knownIds = new Set(personalFonts.map((font) => font.id));
+     for (const file of files) {
+       const prepared = await preparePersonalFont(file);
+       if (knownIds.has(prepared.id)) {
+         setFontNotice(`${file.name} is already in My Fonts.`);
+         continue;
+       }
+       const face = new FontFace(prepared.family, await prepared.blob.arrayBuffer(), { weight: String(prepared.weight) });
+       await face.load();
+       document.fonts.add(face);
+       await savePersonalFont(prepared);
+       knownIds.add(prepared.id);
+       setPersonalFonts((current) => [...current, prepared]);
+       setFontNotice(`${prepared.label} was added to My Fonts on this device.`);
+     }
+   } catch (error) {
+     setFontNotice(error.message || "This font could not be imported.");
+   } finally {
+     setFontImportBusy(false);
+   }
+ }
+
+ async function renamePersonalFont(font, label) {
+   const renamed = { ...font, label: label.trim() || font.family };
+   await savePersonalFont(renamed);
+   setPersonalFonts((current) => current.map((item) => item.id === font.id ? renamed : item));
+ }
+
+ async function removePersonalFont(font) {
+   if (!window.confirm(`Delete ${font.label || font.family} from My Fonts on this device?`)) return;
+   await deletePersonalFont(font.id);
+   setPersonalFonts((current) => current.filter((item) => item.id !== font.id));
+   for (const face of document.fonts) if (face.family === font.family) document.fonts.delete(face);
+   setFontNotice("Font deleted from local browser storage.");
+ }
 
  function setSelectedTransparencyMask(mask) {
    if (!selectedObject) return;
@@ -2804,7 +3003,7 @@ function deletePage(pageId) {
       image.src = object.imageFillSrc;
     }));
     const fontLoads = outputObjects.filter((object) => object.type === "text").map((object) => {
-      const font = `${object.italic ? "italic " : ""}${object.bold ? "bold " : ""}${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+      const font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
       return document.fonts.load(font, object.text).catch(() => []);
     });
 
@@ -2828,7 +3027,8 @@ function deletePage(pageId) {
       context.clip();
       outputObjects.forEach((object) => {
         const masks = [...(object.transparencyMasks ?? []), ...(object.transparencyMask ? [object.transparencyMask] : [])];
-        const needsLayer = (object.opacity ?? 100) < 100 || masks.length > 0 || (object.type === "image" && object.alphaMask?.paths?.length);
+        const hasImageEffects = object.type === "image" && (object.imageOutlineEnabled || object.imageShadowEnabled || object.imageInnerShadowEnabled);
+        const needsLayer = (object.opacity ?? 100) < 100 || masks.length > 0 || (object.type === "image" && object.alphaMask?.paths?.length) || hasImageEffects;
         const objectLayer = needsLayer ? document.createElement("canvas") : null;
         if (objectLayer) {
           objectLayer.width = output.width;
@@ -2974,6 +3174,26 @@ function deletePage(pageId) {
           });
           context.restore();
         }
+        if (hasImageEffects && objectLayer) {
+          const loaded = loadedImages.find((item) => item?.object.id === object.id);
+          if (loaded) {
+            const imageWidth = ((object.width ?? 36) / 100) * output.width;
+            const imageHeight = imageWidth * loaded.image.height / loaded.image.width;
+            const angle = (object.rotation ?? 0) * Math.PI / 180;
+            const boundsWidth = Math.abs(imageWidth * Math.cos(angle)) + Math.abs(imageHeight * Math.sin(angle));
+            const boundsHeight = Math.abs(imageWidth * Math.sin(angle)) + Math.abs(imageHeight * Math.cos(angle));
+            const cropLeft = Math.floor(x - boundsWidth / 2);
+            const cropTop = Math.floor(y - boundsHeight / 2);
+            const source = document.createElement("canvas");
+            source.width = Math.max(1, Math.ceil(boundsWidth));
+            source.height = Math.max(1, Math.ceil(boundsHeight));
+            source.getContext("2d").drawImage(objectLayer, -cropLeft, -cropTop);
+            const effected = createImageEffectCanvas(source, object, scaleX, scaleY);
+            const layerContext = objectLayer.getContext("2d");
+            layerContext.clearRect(cropLeft, cropTop, source.width, source.height);
+            layerContext.drawImage(effected.canvas, cropLeft - effected.padding, cropTop - effected.padding);
+          }
+        }
         if (objectLayer) {
           posterContext.save();
           posterContext.globalAlpha = (object.opacity ?? 100) / 100;
@@ -3033,6 +3253,8 @@ function deletePage(pageId) {
     const maskImages = [gradientMask, sourceMask].filter(Boolean).join(", ") || undefined;
     const selected = interactive && selectedIds.includes(object.id) && (!object.groupId || groupEditMode);
     const groupSelection = interactive && object.type === "group" && selectedIds.includes(object.id);
+    const effectId = `${interactive ? "control" : "art"}-${String(object.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+    const hasImageEffects = object.type === "image" && (object.imageOutlineEnabled || object.imageShadowEnabled || object.imageInnerShadowEnabled);
     return (
       <div
         key={`${interactive ? "control" : "art"}-${object.id}`}
@@ -3065,10 +3287,18 @@ function deletePage(pageId) {
           WebkitMaskRepeat: maskImages ? "no-repeat" : undefined,
           maskComposite: transparencyMasks.length && sourceMask ? "intersect" : undefined,
           WebkitMaskComposite: transparencyMasks.length && sourceMask ? "source-in" : undefined,
+          filter: hasImageEffects ? `url(#image-effects-${effectId})` : undefined,
         }}>
+          {object.type === "text" && object.innerShadowEnabled && <svg className="effect-filter-definitions" aria-hidden="true" width="0" height="0"><defs><filter id={`text-inner-${effectId}`} x="-30%" y="-30%" width="160%" height="160%" colorInterpolationFilters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation={(object.innerShadowBlur ?? 6) / 2} result="text-inner-blur" /><feOffset in="text-inner-blur" dx={object.innerShadowOffsetX ?? 2} dy={object.innerShadowOffsetY ?? 2} result="text-inner-offset" /><feComposite in="SourceAlpha" in2="text-inner-offset" operator="out" result="text-inner-edge" /><feFlood floodColor={object.innerShadowColor ?? "#000000"} floodOpacity={(object.innerShadowOpacity ?? 55) / 100} result="text-inner-color" /><feComposite in="text-inner-color" in2="text-inner-edge" operator="in" result="text-inner-shadow" /><feMerge><feMergeNode in="SourceGraphic" /><feMergeNode in="text-inner-shadow" /></feMerge></filter></defs></svg>}
+          {hasImageEffects && <svg className="effect-filter-definitions" aria-hidden="true" width="0" height="0"><defs><filter id={`image-effects-${effectId}`} x="-80%" y="-80%" width="260%" height="260%" colorInterpolationFilters="sRGB">
+            {object.imageShadowEnabled && <><feGaussianBlur in="SourceAlpha" stdDeviation={(object.imageShadowBlur ?? 8) / 2} result="image-shadow-blur" /><feOffset in="image-shadow-blur" dx={object.imageShadowOffsetX ?? 2} dy={object.imageShadowOffsetY ?? 3} result="image-shadow-offset" /><feFlood floodColor={object.imageShadowColor ?? "#000000"} floodOpacity={(object.imageShadowOpacity ?? 55) / 100} result="image-shadow-color" /><feComposite in="image-shadow-color" in2="image-shadow-offset" operator="in" result="image-outer-shadow" /></>}
+            {object.imageOutlineEnabled && <><feMorphology in="SourceAlpha" operator="dilate" radius={object.imageOutlineWidth ?? 2} result="image-outline-mask" /><feFlood floodColor={object.imageOutlineColor ?? "#ffffff"} result="image-outline-color" /><feComposite in="image-outline-color" in2="image-outline-mask" operator="in" result="image-outline" /></>}
+            {object.imageInnerShadowEnabled && <><feGaussianBlur in="SourceAlpha" stdDeviation={(object.imageInnerShadowBlur ?? 6) / 2} result="image-inner-blur" /><feOffset in="image-inner-blur" dx={object.imageInnerShadowOffsetX ?? 2} dy={object.imageInnerShadowOffsetY ?? 2} result="image-inner-offset" /><feComposite in="SourceAlpha" in2="image-inner-offset" operator="out" result="image-inner-edge" /><feFlood floodColor={object.imageInnerShadowColor ?? "#000000"} floodOpacity={(object.imageInnerShadowOpacity ?? 55) / 100} result="image-inner-color" /><feComposite in="image-inner-color" in2="image-inner-edge" operator="in" result="image-inner-shadow" /></>}
+            <feMerge>{object.imageShadowEnabled && <feMergeNode in="image-outer-shadow" />}{object.imageOutlineEnabled && <feMergeNode in="image-outline" />}<feMergeNode in="SourceGraphic" />{object.imageInnerShadowEnabled && <feMergeNode in="image-inner-shadow" />}</feMerge>
+          </filter></defs></svg>}
           {object.type === "text" && <span className="canvas-text" data-object-id={object.id} dir={object.direction ?? "auto"} style={getTextTypographyStyle(object)}>
             <span className="canvas-text-layer canvas-text-outline" dir={object.direction ?? "auto"} aria-hidden="true" style={getTextStrokeStyle(object)}>{object.text}</span>
-            <span className="canvas-text-layer canvas-text-fill" dir={object.direction ?? "auto"} style={{ ...getTextPreviewStyle({ ...object, strokeEnabled: false, opacity: 100 }), WebkitTextStroke: "0 transparent", paintOrder: "normal" }}>{object.text}</span>
+            <span className="canvas-text-layer canvas-text-fill" dir={object.direction ?? "auto"} style={{ ...getTextPreviewStyle({ ...object, strokeEnabled: false, opacity: 100 }), WebkitTextStroke: "0 transparent", paintOrder: "normal", filter: object.innerShadowEnabled ? `url(#text-inner-${effectId})` : undefined }}>{object.text}</span>
           </span>}
           {vectorShape && <ShapeArtwork shape={object.shape} color={object.color} className="canvas-vector-shape" />}
           {object.shape === "custom" && <svg className="canvas-vector-shape canvas-custom-vector" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -3272,6 +3502,7 @@ function deletePage(pageId) {
           <div className="history-actions" aria-label="Edit history">
             <button type="button" aria-label="Undo" title="Undo (Ctrl/Cmd+Z)" disabled={!history.length && !pathDraft?.length} onClick={undo}><span aria-hidden="true">↶</span><span className="history-action-label">Undo</span></button>
             <button type="button" aria-label="Redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled={!redoStack.length} onClick={redo}><span aria-hidden="true">↷</span><span className="history-action-label">Redo</span></button>
+            <button type="button" className="delete-selected-action" aria-label="Delete selected object" title="Delete selected object" disabled={!selectedIds.length} onClick={deleteSelectedObjects}><svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7m4 3v7m4-7v7" /></svg><span className="history-action-label">Delete</span></button>
           </div>
           <div className="export-actions" aria-label="Export options">
             <button type="button" title="Export as JPEG" onClick={() => openExport("jpg")}>JPG</button>
@@ -3455,16 +3686,48 @@ function deletePage(pageId) {
               <details className="text-section">
                 <summary>Text</summary>
                 <label className="field-label" htmlFor="poster-text">Content</label>
-                <textarea id="poster-text" className="text-input" dir={selectedObject.direction ?? "auto"} style={{ fontFamily: selectedObject.fontFamily ?? fontOptions[0].value }} value={selectedObject.text} onChange={(event) => updateSelected({ text: event.target.value })} />
+                <textarea id="poster-text" className="text-input" dir={selectedObject.direction ?? "auto"} style={{ fontFamily: selectedObject.fontFamily ?? fontOptions[0].value, fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400), fontStyle: selectedObject.italic ? "italic" : "normal", letterSpacing: `${selectedObject.letterSpacing ?? 0}px`, wordSpacing: `${selectedObject.wordSpacing ?? 0}px`, lineHeight: selectedObject.lineHeight ?? 1.25 }} value={selectedObject.text} onChange={(event) => updateSelected({ text: event.target.value })} />
               </details>
               <details className="text-section">
                 <summary>Font</summary>
                 <label className="field-label" htmlFor="font-family">Typeface</label>
-                <select id="font-family" className="font-select" value={selectedObject.fontFamily ?? fontOptions[0].value} onChange={(event) => updateSelected({ fontFamily: event.target.value })}>{fontOptions.map((font) => <option key={font.label} value={font.value}>{font.label}</option>)}</select>
+                <input aria-label="Search fonts" className="text-input font-search" placeholder="Search fonts" value={fontSearch} onChange={(event) => setFontSearch(event.target.value)} />
+                <select aria-label="Font category" className="font-select" value={fontCategory} onChange={(event) => setFontCategory(event.target.value)}>{["All Fonts", "Urdu Nastaliq", "Arabic", "English", "Hindi / Devanagari", "My Fonts"].map((category) => <option key={category}>{category}</option>)}</select>
+                <select id="font-family" className="font-select" value={selectedObject.fontFamily ?? fontOptions[0].value} onChange={(event) => {
+                  const family = event.target.value;
+                  const personal = personalFonts.filter((font) => `"${font.family}"` === family);
+                  const nextWeight = personal.length ? (personal.find((font) => font.weight === selectedObject.fontWeight)?.weight ?? personal[0].weight) : (selectedObject.bold ? 700 : 400);
+                  updateSelected({ fontFamily: family, fontWeight: nextWeight });
+                }}>
+                  {(fontCategory === "My Fonts" ? [] : fontOptions.filter((font) => (fontCategory === "All Fonts" || font.category === fontCategory) && font.label.toLowerCase().includes(fontSearch.toLowerCase()))).map((font) => <option key={font.label} value={font.value}>{font.label}</option>)}
+                  {(fontCategory === "All Fonts" || fontCategory === "My Fonts") && personalFonts.filter((font) => font.label.toLowerCase().includes(fontSearch.toLowerCase())).map((font) => <option key={font.id} value={`"${font.family}"`}>{font.label} · My Fonts</option>)}
+                  {((!fontOptions.some((font) => font.value === selectedObject.fontFamily) && !personalFonts.some((font) => `"${font.family}"` === selectedObject.fontFamily))
+                    ? <option value={selectedObject.fontFamily}>Unavailable font · preserved</option>
+                    : !fontOptions.some((font) => font.value === selectedObject.fontFamily && (fontCategory === "All Fonts" || font.category === fontCategory) && font.label.toLowerCase().includes(fontSearch.toLowerCase())) && !personalFonts.some((font) => `"${font.family}"` === selectedObject.fontFamily && (fontCategory === "All Fonts" || fontCategory === "My Fonts") && font.label.toLowerCase().includes(fontSearch.toLowerCase())) && <option value={selectedObject.fontFamily}>Current selection · preserved</option>)}
+                </select>
+                {!fontOptions.some((font) => font.value === selectedObject.fontFamily) && !personalFonts.some((font) => `"${font.family}"` === selectedObject.fontFamily) && <p className="panel-hint" role="status">This saved font is unavailable on this device. Text is using the browser fallback; import the same font file to restore its appearance.</p>}
+                {(() => {
+                  const selectedFont = fontOptions.find((font) => font.value === selectedObject.fontFamily);
+                  const personalFont = personalFonts.find((font) => `"${font.family}"` === selectedObject.fontFamily);
+                  return <div className="font-preview" style={{ fontFamily: selectedObject.fontFamily, fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400) }} lang={selectedFont?.category === "Urdu Nastaliq" ? "ur" : selectedFont?.category === "Arabic" ? "ar" : selectedFont?.category === "Hindi / Devanagari" ? "hi" : "en"} dir={selectedFont?.category === "Urdu Nastaliq" || selectedFont?.category === "Arabic" ? "rtl" : "ltr"}>{selectedFont?.sample ?? (personalFont ? (selectedObject.text || "Font preview") : "Font unavailable on this device")}</div>;
+                })()}
+                <label className="field-label" htmlFor="font-weight">Font weight</label>
+                <select id="font-weight" className="font-select" value={selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400)} onChange={(event) => updateSelected({ fontWeight: Number(event.target.value), bold: Number(event.target.value) >= 600 })}>{(() => {
+                  const family = selectedObject.fontFamily;
+                  const weights = personalFonts.filter((font) => `"${font.family}"` === family).map((font) => font.weight ?? 400);
+                  const selectedBuiltin = fontOptions.find((font) => font.value === family);
+                  const available = weights.length ? [...new Set(weights)].sort((a, b) => a - b) : (selectedBuiltin?.weights ?? [400, 700]);
+                  return available.map((weight) => <option key={weight} value={weight}>{({ 400: "Regular", 500: "Medium", 600: "SemiBold", 700: "Bold", 800: "ExtraBold", 900: "Black" })[weight]}</option>);
+                })()}</select>
+                <input ref={personalFontInputRef} className="file-input" type="file" accept=".ttf,.otf,font/ttf,font/otf" multiple onChange={importPersonalFont} />
+                <button type="button" className="font-import-button" onClick={() => personalFontInputRef.current?.click()} disabled={fontImportBusy}>{fontImportBusy ? "Processing font…" : "＋ Add My Font"}</button>
+                <p className="panel-hint">Personal fonts stay in this browser on this device. Clearing browser data removes them.</p>
+                {personalFonts.length > 0 && <div className="personal-font-list"><strong>My Fonts</strong>{personalFonts.map((font) => <div className="personal-font-row" key={font.id}><input aria-label={`Rename ${font.label}`} value={font.label} onChange={(event) => setPersonalFonts((current) => current.map((item) => item.id === font.id ? { ...item, label: event.target.value } : item))} onBlur={(event) => renamePersonalFont(font, event.target.value)} /><button type="button" onClick={() => removePersonalFont(font)} aria-label={`Delete ${font.label}`}>Delete</button>{font.unavailable && <small>Font data unavailable</small>}</div>)}</div>}
+                {fontNotice && <p role="status" className="panel-hint">{fontNotice}</p>}
                 <label className="field-label" htmlFor="font-size">Font size <span>{selectedObject.fontSize}px</span></label>
                 <div className="font-size-controls"><input id="font-size" className="size-range" type="range" min="8" max="200" value={selectedObject.fontSize} onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })} /><input aria-label="Font size in pixels" className="number-input" type="number" min="8" max="200" value={selectedObject.fontSize} onChange={(event) => updateSelected({ fontSize: Math.max(8, Math.min(200, Number(event.target.value) || 8)) })} /></div>
                 <div className="field-label">Style and alignment</div>
-                <div className="format-row"><button className={selectedObject.bold ? "format-active" : ""} aria-label="Bold" aria-pressed={Boolean(selectedObject.bold)} onClick={() => updateSelected({ bold: !selectedObject.bold })}><strong>B</strong></button><button className={selectedObject.italic ? "format-active" : ""} aria-label="Italic" aria-pressed={Boolean(selectedObject.italic)} onClick={() => updateSelected({ italic: !selectedObject.italic })}><em>I</em></button><div className="alignment-control" aria-label="Text alignment">{["left", "center", "right"].map((align) => <button key={align} className={selectedObject.align === align ? "format-active" : ""} aria-label={`Align ${align}`} aria-pressed={selectedObject.align === align} onClick={() => updateSelected({ align })}>{align === "left" ? "≡" : align === "center" ? "☰" : "≡"}</button>)}</div></div>
+                <div className="format-row"><button className={selectedObject.bold ? "format-active" : ""} aria-label="Bold" aria-pressed={Boolean(selectedObject.bold)} onClick={() => updateSelected({ bold: !selectedObject.bold, fontWeight: selectedObject.bold ? 400 : 700 })}><strong>B</strong></button><button className={selectedObject.italic ? "format-active" : ""} aria-label="Italic" aria-pressed={Boolean(selectedObject.italic)} onClick={() => updateSelected({ italic: !selectedObject.italic })}><em>I</em></button><div className="alignment-control" aria-label="Text alignment">{["left", "center", "right"].map((align) => <button key={align} className={selectedObject.align === align ? "format-active" : ""} aria-label={`Align ${align}`} aria-pressed={selectedObject.align === align} onClick={() => updateSelected({ align })}>{align === "left" ? "≡" : align === "center" ? "☰" : "≡"}</button>)}</div></div>
                 <label className="field-label">
   Width
   <span>{selectedObject.width ?? 38}</span>
@@ -3541,23 +3804,34 @@ function deletePage(pageId) {
                 <button className="reset-text-design" type="button" onClick={resetTextDesign}>Reset Text Design</button>
               </details>
               <details className="text-section">
-                <summary>Stroke</summary>
-                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.strokeEnabled)} onChange={(event) => updateSelected({ strokeEnabled: event.target.checked })} />Enable outline</label>
+                <summary>Outline</summary>
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.strokeEnabled)} onChange={(event) => { saveHistory(); updateSelected({ strokeEnabled: event.target.checked }); }} />Enable outline</label>
                 {selectedObject.strokeEnabled && <>
-                  <label className="field-label color-label">Stroke color<input type="color" value={selectedObject.strokeColor ?? "#442d0b"} onChange={(event) => updateSelected({ strokeColor: event.target.value })} /></label>
+                  <label className="field-label color-label">Outline color<input type="color" value={selectedObject.strokeColor ?? "#442d0b"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeColor: event.target.value })} /></label>
                   <label className="field-label" htmlFor="stroke-width">Stroke width <span>{selectedObject.strokeWidth ?? 2}px</span></label>
-                  <input id="stroke-width" className="size-range" type="range" min="0" max="12" step="0.5" value={selectedObject.strokeWidth ?? 2} onChange={(event) => updateSelected({ strokeWidth: Number(event.target.value) })} />
+                  <input id="stroke-width" className="size-range" type="range" min="0" max="12" step="0.5" value={selectedObject.strokeWidth ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeWidth: Number(event.target.value) })} />
                 </>}
               </details>
               <details className="text-section">
-                <summary>Shadow</summary>
-                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.shadowEnabled)} onChange={(event) => updateSelected({ shadowEnabled: event.target.checked })} />Enable shadow</label>
+                <summary>Outer Shadow</summary>
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.shadowEnabled)} onChange={(event) => { saveHistory(); updateSelected({ shadowEnabled: event.target.checked }); }} />Enable shadow</label>
                 {selectedObject.shadowEnabled && <>
-                  <label className="field-label color-label">Shadow color<input type="color" value={selectedObject.shadowColor ?? "#000000"} onChange={(event) => updateSelected({ shadowColor: event.target.value })} /></label>
-                  <label className="field-label" htmlFor="shadow-blur">Blur <span>{selectedObject.shadowBlur ?? 8}px</span></label><input id="shadow-blur" className="size-range" type="range" min="0" max="40" value={selectedObject.shadowBlur ?? 8} onChange={(event) => updateSelected({ shadowBlur: Number(event.target.value) })} />
-                  <label className="field-label" htmlFor="shadow-x">X offset <span>{selectedObject.shadowOffsetX ?? 2}px</span></label><input id="shadow-x" className="size-range" type="range" min="-30" max="30" value={selectedObject.shadowOffsetX ?? 2} onChange={(event) => updateSelected({ shadowOffsetX: Number(event.target.value) })} />
-                  <label className="field-label" htmlFor="shadow-y">Y offset <span>{selectedObject.shadowOffsetY ?? 3}px</span></label><input id="shadow-y" className="size-range" type="range" min="-30" max="30" value={selectedObject.shadowOffsetY ?? 3} onChange={(event) => updateSelected({ shadowOffsetY: Number(event.target.value) })} />
-                  <label className="field-label" htmlFor="shadow-opacity">Shadow opacity <span>{selectedObject.shadowOpacity ?? 65}%</span></label><input id="shadow-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.shadowOpacity ?? 65} onChange={(event) => updateSelected({ shadowOpacity: Number(event.target.value) })} />
+                  <label className="field-label color-label">Shadow color<input type="color" value={selectedObject.shadowColor ?? "#000000"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ shadowColor: event.target.value })} /></label>
+                  <label className="field-label" htmlFor="shadow-blur">Blur <span>{selectedObject.shadowBlur ?? 8}px</span></label><input id="shadow-blur" className="size-range" type="range" min="0" max="40" value={selectedObject.shadowBlur ?? 8} onPointerDown={saveHistory} onChange={(event) => updateSelected({ shadowBlur: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="shadow-x">X offset <span>{selectedObject.shadowOffsetX ?? 2}px</span></label><input id="shadow-x" className="size-range" type="range" min="-30" max="30" value={selectedObject.shadowOffsetX ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ shadowOffsetX: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="shadow-y">Y offset <span>{selectedObject.shadowOffsetY ?? 3}px</span></label><input id="shadow-y" className="size-range" type="range" min="-30" max="30" value={selectedObject.shadowOffsetY ?? 3} onPointerDown={saveHistory} onChange={(event) => updateSelected({ shadowOffsetY: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="shadow-opacity">Shadow opacity <span>{selectedObject.shadowOpacity ?? 65}%</span></label><input id="shadow-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.shadowOpacity ?? 65} onPointerDown={saveHistory} onChange={(event) => updateSelected({ shadowOpacity: Number(event.target.value) })} />
+                </>}
+              </details>
+              <details className="text-section">
+                <summary>Inner Shadow</summary>
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.innerShadowEnabled)} onChange={(event) => { saveHistory(); updateSelected({ innerShadowEnabled: event.target.checked }); }} />Enable inner shadow</label>
+                {selectedObject.innerShadowEnabled && <>
+                  <label className="field-label color-label">Shadow color<input type="color" value={selectedObject.innerShadowColor ?? "#000000"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ innerShadowColor: event.target.value })} /></label>
+                  <label className="field-label" htmlFor="text-inner-shadow-x">Horizontal offset <span>{selectedObject.innerShadowOffsetX ?? 2}px</span></label><input id="text-inner-shadow-x" className="size-range" type="range" min="-20" max="20" value={selectedObject.innerShadowOffsetX ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ innerShadowOffsetX: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="text-inner-shadow-y">Vertical offset <span>{selectedObject.innerShadowOffsetY ?? 2}px</span></label><input id="text-inner-shadow-y" className="size-range" type="range" min="-20" max="20" value={selectedObject.innerShadowOffsetY ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ innerShadowOffsetY: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="text-inner-shadow-blur">Blur <span>{selectedObject.innerShadowBlur ?? 6}px</span></label><input id="text-inner-shadow-blur" className="size-range" type="range" min="0" max="30" value={selectedObject.innerShadowBlur ?? 6} onPointerDown={saveHistory} onChange={(event) => updateSelected({ innerShadowBlur: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="text-inner-shadow-opacity">Opacity <span>{selectedObject.innerShadowOpacity ?? 55}%</span></label><input id="text-inner-shadow-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.innerShadowOpacity ?? 55} onPointerDown={saveHistory} onChange={(event) => updateSelected({ innerShadowOpacity: Number(event.target.value) })} />
                 </>}
               </details>
               <details className="text-section">
@@ -3571,10 +3845,13 @@ function deletePage(pageId) {
               </details>
               <details className="text-section">
                 <summary>Spacing</summary>
+                <label className="field-label" htmlFor="word-spacing">Word spacing <span>{selectedObject.wordSpacing ?? 0}px</span></label>
+                <div className="font-size-controls"><input id="word-spacing" className="size-range" type="range" min="-20" max="50" step="1" value={selectedObject.wordSpacing ?? 0} onPointerDown={saveHistory} onChange={(event) => updateSelected({ wordSpacing: Number(event.target.value) })} /><input aria-label="Word spacing in pixels" className="number-input" type="number" min="-100" max="200" value={selectedObject.wordSpacing ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ wordSpacing: Number(event.target.value) || 0 })} /><button type="button" onClick={() => { saveHistory(); updateSelected({ wordSpacing: 0 }); }}>Reset</button></div>
                 <label className="field-label" htmlFor="letter-spacing">Letter spacing <span>{selectedObject.letterSpacing ?? 0}px</span></label>
-                <input id="letter-spacing" className="size-range" type="range" min="-5" max="20" step="0.5" value={selectedObject.letterSpacing ?? 0} onChange={(event) => updateSelected({ letterSpacing: Number(event.target.value) })} />
+                <div className="font-size-controls"><input id="letter-spacing" className="size-range" type="range" min="-5" max="20" step="0.5" value={selectedObject.letterSpacing ?? 0} onPointerDown={saveHistory} onChange={(event) => updateSelected({ letterSpacing: Number(event.target.value) })} /><input aria-label="Letter spacing in pixels" className="number-input" type="number" min="-50" max="100" step="0.5" value={selectedObject.letterSpacing ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ letterSpacing: Number(event.target.value) || 0 })} /><button type="button" onClick={() => { saveHistory(); updateSelected({ letterSpacing: 0 }); }}>Reset</button></div>
+                {!((typeof CanvasRenderingContext2D !== "undefined") && ("letterSpacing" in CanvasRenderingContext2D.prototype) && ("wordSpacing" in CanvasRenderingContext2D.prototype)) && <p className="panel-hint">This browser lacks canvas spacing support. CSS preview spacing is available; exports may use default spacing.</p>}
                 <label className="field-label" htmlFor="line-height">Line height <span>{(selectedObject.lineHeight ?? 1.25).toFixed(2)}×</span></label>
-                <input id="line-height" className="size-range" type="range" min="0.8" max="3" step="0.05" value={selectedObject.lineHeight ?? 1.25} onChange={(event) => updateSelected({ lineHeight: Number(event.target.value) })} />
+                <input id="line-height" className="size-range" type="range" min="0.8" max="3" step="0.05" value={selectedObject.lineHeight ?? 1.25} onPointerDown={saveHistory} onChange={(event) => updateSelected({ lineHeight: Number(event.target.value) })} />
               </details>
               <details className="text-section">
                 <summary>Position</summary>
@@ -3625,6 +3902,34 @@ function deletePage(pageId) {
               <button className="replace-image-btn" onClick={() => uploadRef.current?.click()}>Replace image</button>
               <label className="field-label" htmlFor="image-size">Image width <span>{selectedObject.width ?? 36}%</span></label>
               <input id="image-size" className="size-range" type="range" min="3" max={Math.max(100, Math.ceil((selectedObject.width ?? 36) * 2))} value={selectedObject.width ?? 36} onChange={(event) => updateSelected({ width: Number(event.target.value) })} />
+              <label className="field-label" htmlFor="image-rotation">Rotation <span>{selectedObject.rotation ?? 0}°</span></label>
+              <input id="image-rotation" className="size-range" type="range" min="-180" max="180" value={selectedObject.rotation ?? 0} onPointerDown={saveHistory} onChange={(event) => updateSelected({ rotation: Number(event.target.value) })} />
+              <label className="field-label" htmlFor="image-opacity">Transparency <span>{100 - (selectedObject.opacity ?? 100)}%</span></label>
+              <input id="image-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.opacity ?? 100} onPointerDown={saveHistory} onChange={(event) => updateSelected({ opacity: Number(event.target.value) })} />
+              <details className="text-section image-effects-section">
+                <summary>Image Effects</summary>
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.imageOutlineEnabled)} onChange={(event) => { saveHistory(); updateSelected({ imageOutlineEnabled: event.target.checked }); }} />Enable outline</label>
+                {selectedObject.imageOutlineEnabled && <>
+                  <label className="field-label color-label">Outline color<input type="color" value={selectedObject.imageOutlineColor ?? "#ffffff"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageOutlineColor: event.target.value })} /></label>
+                  <label className="field-label" htmlFor="image-outline-width">Outline thickness <span>{selectedObject.imageOutlineWidth ?? 2}px</span></label><input id="image-outline-width" className="size-range" type="range" min="0.5" max="20" step="0.5" value={selectedObject.imageOutlineWidth ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageOutlineWidth: Number(event.target.value) })} />
+                </>}
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.imageShadowEnabled)} onChange={(event) => { saveHistory(); updateSelected({ imageShadowEnabled: event.target.checked }); }} />Enable outer shadow</label>
+                {selectedObject.imageShadowEnabled && <>
+                  <label className="field-label color-label">Shadow color<input type="color" value={selectedObject.imageShadowColor ?? "#000000"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageShadowColor: event.target.value })} /></label>
+                  <label className="field-label" htmlFor="image-shadow-x">Horizontal offset <span>{selectedObject.imageShadowOffsetX ?? 2}px</span></label><input id="image-shadow-x" className="size-range" type="range" min="-40" max="40" value={selectedObject.imageShadowOffsetX ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageShadowOffsetX: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-shadow-y">Vertical offset <span>{selectedObject.imageShadowOffsetY ?? 3}px</span></label><input id="image-shadow-y" className="size-range" type="range" min="-40" max="40" value={selectedObject.imageShadowOffsetY ?? 3} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageShadowOffsetY: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-shadow-blur">Blur <span>{selectedObject.imageShadowBlur ?? 8}px</span></label><input id="image-shadow-blur" className="size-range" type="range" min="0" max="40" value={selectedObject.imageShadowBlur ?? 8} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageShadowBlur: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-shadow-opacity">Opacity <span>{selectedObject.imageShadowOpacity ?? 55}%</span></label><input id="image-shadow-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.imageShadowOpacity ?? 55} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageShadowOpacity: Number(event.target.value) })} />
+                </>}
+                <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.imageInnerShadowEnabled)} onChange={(event) => { saveHistory(); updateSelected({ imageInnerShadowEnabled: event.target.checked }); }} />Enable inner shadow</label>
+                {selectedObject.imageInnerShadowEnabled && <>
+                  <label className="field-label color-label">Inner shadow color<input type="color" value={selectedObject.imageInnerShadowColor ?? "#000000"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageInnerShadowColor: event.target.value })} /></label>
+                  <label className="field-label" htmlFor="image-inner-shadow-x">Horizontal offset <span>{selectedObject.imageInnerShadowOffsetX ?? 2}px</span></label><input id="image-inner-shadow-x" className="size-range" type="range" min="-30" max="30" value={selectedObject.imageInnerShadowOffsetX ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageInnerShadowOffsetX: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-inner-shadow-y">Vertical offset <span>{selectedObject.imageInnerShadowOffsetY ?? 2}px</span></label><input id="image-inner-shadow-y" className="size-range" type="range" min="-30" max="30" value={selectedObject.imageInnerShadowOffsetY ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageInnerShadowOffsetY: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-inner-shadow-blur">Blur <span>{selectedObject.imageInnerShadowBlur ?? 6}px</span></label><input id="image-inner-shadow-blur" className="size-range" type="range" min="0" max="30" value={selectedObject.imageInnerShadowBlur ?? 6} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageInnerShadowBlur: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="image-inner-shadow-opacity">Opacity <span>{selectedObject.imageInnerShadowOpacity ?? 55}%</span></label><input id="image-inner-shadow-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.imageInnerShadowOpacity ?? 55} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageInnerShadowOpacity: Number(event.target.value) })} />
+                </>}
+              </details>
               <details className="text-section">
                 <summary>Position</summary>
                 <label className="field-label" htmlFor="image-position-x">X position (%)</label>
