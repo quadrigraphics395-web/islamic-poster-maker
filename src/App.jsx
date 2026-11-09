@@ -2,6 +2,7 @@
 import "./App.css";
 import BackgroundRemover from "./components/BackgroundRemover.jsx";
 import ExportSettings from "./components/ExportSettings.jsx";
+import ImageCropEditor from "./components/ImageCropEditor.jsx";
 import ProjectManager from "./components/ProjectManager.jsx";
 import TemplateGallery from "./components/TemplateGallery.jsx";
 import TemplateManager from "./components/TemplateManager.jsx";
@@ -16,13 +17,19 @@ import { builtInFonts } from "./fontLibrary.js";
 import { deletePersonalFont, listPersonalFonts, preparePersonalFont, savePersonalFont } from "./utils/personalFonts.js";
 import { removeObjectsById, transformEffectOffset } from "./utils/objectOperations.js";
 import { adminSignIn, adminSignOut, checkAdminSession, cleanupOnlineAssets, deleteOnlineTemplate, getOnlineTemplate, listOnlineTemplates, onlineTemplatesConfigured, saveOnlineTemplate, updateOnlineTemplate } from "./utils/onlineTemplates.js";
+import { cropRectToSource, getCroppedImageAspectRatio, normalizeCropRect } from "./utils/imageCrop.js";
+import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackgroundMode, getJpegQuality, getPrintExportDimensions, getPresetPhysicalSize, readProjectDocumentMeta, toCssPixels } from "./utils/documentUnits.js";
+import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
+import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 
 const canvasSizes = {
   "Instagram Post 1080x1080": { width: 1080, height: 1080 },
   "YouTube Thumbnail 1280x720": { width: 1280, height: 720 },
   "Instagram Story 1080x1920": { width: 1080, height: 1920 },
-  "A4 Portrait": { width: 2480, height: 3508 },
-  "A4 Landscape": { width: 3508, height: 2480 },
+  "A4 Portrait": { width: 794, height: 1123, widthIn: 210 / 25.4, heightIn: 297 / 25.4 },
+  "A4 Landscape": { width: 1123, height: 794, widthIn: 297 / 25.4, heightIn: 210 / 25.4 },
+  "A3 Portrait": { width: 1123, height: 1587, widthIn: 297 / 25.4, heightIn: 420 / 25.4 },
+  "A3 Landscape": { width: 1587, height: 1123, widthIn: 420 / 25.4, heightIn: 297 / 25.4 },
   "Square 1080x1080": { width: 1080, height: 1080 },
 };
 
@@ -616,6 +623,9 @@ function App() {
   const [canvasSize, setCanvasSize] = useState("Square 1080x1080");
   const [customWidth, setCustomWidth] = useState(1080);
   const [customHeight, setCustomHeight] = useState(1080);
+  const [sizeUnit, setSizeUnit] = useState("px");
+  const [printDpi, setPrintDpi] = useState(DEFAULT_PRINT_DPI);
+  const [dimensionError, setDimensionError] = useState("");
   const [background, setBackground] = useState("#17352c");
   const [backgroundMode, setBackgroundMode] = useState("solid");
   const [shapePickerOpen, setShapePickerOpen] = useState(false);
@@ -724,6 +734,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportInitialFormat, setExportInitialFormat] = useState("png");
+  const [cropImageId, setCropImageId] = useState(null);
   const [isTemplateAdmin, setIsTemplateAdmin] = useState(false);
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
@@ -823,6 +834,9 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const dimensions = canvasSize === "Custom"
     ? { width: customWidth, height: customHeight }
     : canvasSizes[canvasSize];
+  const presetPhysicalSize = canvasSize === "Custom" ? null : getPresetPhysicalSize(canvasSizes[canvasSize]);
+  const physicalSize = presetPhysicalSize ?? { widthIn: dimensions.width / CSS_PIXELS_PER_INCH, heightIn: dimensions.height / CSS_PIXELS_PER_INCH };
+  const previewExportDimensions = getPrintExportDimensions(dimensions.width, dimensions.height, printDpi);
   useEffect(() => {
     setCanvasZoom(1);
     setCanvasViewOffset({ x: 0, y: 0 });
@@ -1057,7 +1071,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   function saveHistory() {
   setHistory((prev) => [
     ...prev,
-    JSON.stringify(objects)
+    serializeObjectSnapshot(objects)
   ]);
 
   setRedoStack([]);
@@ -1074,10 +1088,10 @@ function undo() {
 
   setRedoStack((prev) => [
     ...prev,
-    JSON.stringify(objects)
+    serializeObjectSnapshot(objects)
   ]);
 
-  const restored = JSON.parse(last);
+  const restored = restoreObjectSnapshot(last);
   setObjects(restored);
   const stillSelected = selectedIds.filter((id) => findObject(restored, id));
   setSelectedIds(stillSelected);
@@ -1095,10 +1109,10 @@ function redo() {
 
   setHistory((prev) => [
     ...prev,
-    JSON.stringify(objects)
+    serializeObjectSnapshot(objects)
   ]);
 
-  const restored = JSON.parse(last);
+  const restored = restoreObjectSnapshot(last);
   setObjects(restored);
   const stillSelected = selectedIds.filter((id) => findObject(restored, id));
   setSelectedIds(stillSelected);
@@ -1195,6 +1209,9 @@ function deletePage(pageId) {
   function resetProjectState() {
     projectExtrasRef.current = {};
     resetPoster();
+    setSizeUnit("px");
+    setPrintDpi(DEFAULT_PRINT_DPI);
+    setDimensionError("");
     setCanvasViewOffset({ x: 0, y: 0 });
     setPages([{ id: 1, name: "Page 1", objects: [] }]);
     setCurrentPageId(1);
@@ -1243,6 +1260,32 @@ function deletePage(pageId) {
 
  function updateSelected(updates) {
     setObjects((current) => updateObjectById(current, selectedId, updates));
+  }
+
+  function beginImageCrop() {
+    if (selectedObject?.type === "image") setCropImageId(selectedObject.id);
+  }
+
+  function applyImageCrop({ crop, imageSize }) {
+    if (!cropImageId) return;
+    saveHistory();
+    setObjects((current) => updateObjectById(current, cropImageId, {
+      crop: normalizeCropRect(crop),
+      naturalWidth: imageSize.width,
+      naturalHeight: imageSize.height,
+    }));
+    setCropImageId(null);
+  }
+
+  function updateCustomDimension(axis, value) {
+    const pixels = toCssPixels(value, sizeUnit);
+    if (!pixels || pixels > 50_000) {
+      setDimensionError("Enter a positive size. Custom dimensions must be 50,000 CSS pixels or smaller.");
+      return;
+    }
+    setDimensionError("");
+    if (axis === "width") setCustomWidth(pixels);
+    else setCustomHeight(pixels);
   }
 
  async function importPersonalFont(event) {
@@ -1686,8 +1729,10 @@ function deletePage(pageId) {
     if (object.type === "image") {
       const image = canvasRef.current?.querySelector(`.canvas-control-object[data-object-id="${CSS.escape(String(object.id))}"] .canvas-image`);
       const imageWidth = (object.width ?? 36) * dimensions.width / 100;
-      const imageHeight = image?.naturalWidth
-        ? imageWidth * image.naturalHeight / image.naturalWidth
+      const imageHeight = object.crop && object.naturalWidth && object.naturalHeight
+        ? imageWidth / getCroppedImageAspectRatio(object.crop, object.naturalWidth, object.naturalHeight)
+        : image?.naturalWidth
+          ? imageWidth * image.naturalHeight / image.naturalWidth
         : (object.height ?? 36) * dimensions.height / 100;
       const radians = (object.rotation ?? 0) * Math.PI / 180;
       const centerX = object.x * dimensions.width / 100;
@@ -2614,6 +2659,14 @@ function deletePage(pageId) {
       canvasSize,
       customWidth,
       customHeight,
+      documentMeta: {
+        sizeUnit,
+        printDpi,
+        widthCssPx: dimensions.width,
+        heightCssPx: dimensions.height,
+        widthIn: physicalSize.widthIn,
+        heightIn: physicalSize.heightIn,
+      },
       background,
       backgroundMode,
       backgroundImage,
@@ -2924,7 +2977,7 @@ function deletePage(pageId) {
 
   function applyProject(project, projectId = null, projectName = "") {
     if (!project || typeof project !== "object") throw new Error("This project file does not contain a valid poster.");
-    const projectFields = new Set(["version", "canvasSize", "customWidth", "customHeight", "background", "backgroundMode", "backgroundImage", "backgroundGradientColors", "backgroundGradientThirdEnabled", "backgroundGradientAngle", "selectedIslamicBackgroundId", "backgroundOverlayEnabled", "backgroundOverlayOpacity", "objects", "pages", "currentPageId", "templateName", "snapGridEnabled"]);
+    const projectFields = new Set(["version", "canvasSize", "customWidth", "customHeight", "documentMeta", "background", "backgroundMode", "backgroundImage", "backgroundGradientColors", "backgroundGradientThirdEnabled", "backgroundGradientAngle", "selectedIslamicBackgroundId", "backgroundOverlayEnabled", "backgroundOverlayOpacity", "objects", "pages", "currentPageId", "templateName", "snapGridEnabled"]);
     projectExtrasRef.current = Object.fromEntries(Object.entries(project).filter(([key]) => !projectFields.has(key)));
     if (Array.isArray(project.customFonts)) {
       project.customFonts.forEach((font) => {
@@ -2943,6 +2996,10 @@ function deletePage(pageId) {
     setCanvasSize(project.canvasSize || "Square 1080x1080");
     setCustomWidth(project.customWidth || 1080);
     setCustomHeight(project.customHeight || 1080);
+    const documentMeta = readProjectDocumentMeta(project);
+    setSizeUnit(documentMeta.sizeUnit);
+    setPrintDpi(documentMeta.printDpi);
+    setDimensionError("");
     setBackground(project.background || "#ffffff");
     setBackgroundMode(project.backgroundMode || "solid");
     setBackgroundImage(project.backgroundImage || null);
@@ -3038,13 +3095,12 @@ function deletePage(pageId) {
 
   function downloadPoster(format, exportBackground, onRendered = null, onError = null) {
     const outputObjects = flattenGroups(objects);
+    const printSize = getPrintExportDimensions(dimensions.width, dimensions.height, printDpi);
     const output = document.createElement("canvas");
-    output.width = dimensions.width;
-    output.height = dimensions.height;
+    output.width = printSize.width;
+    output.height = printSize.height;
     const context = output.getContext("2d");
-    const exportBackgroundMode = format === "jpg" && exportBackground.mode === "transparent"
-      ? "white"
-      : exportBackground.mode;
+    const exportBackgroundMode = getExportBackgroundMode(format, exportBackground.mode);
     if (exportBackgroundMode === "poster") {
       if (backgroundMode === "gradient") {
         const angle = (backgroundGradientAngle * Math.PI) / 180;
@@ -3099,7 +3155,7 @@ function deletePage(pageId) {
       return document.fonts.load(font, object.text).catch(() => []);
     });
 
-    Promise.all([pendingBackground, ...images, ...textFillImages, ...fontLoads]).then(([loadedBackground, ...loadedAssets]) => {
+    Promise.all([pendingBackground, ...images, ...textFillImages, ...fontLoads]).then(async ([loadedBackground, ...loadedAssets]) => {
       const loadedImages = loadedAssets.slice(0, images.length);
       const loadedTextFillImages = loadedAssets.slice(images.length, images.length + textFillImages.length);
       if (loadedBackground) {
@@ -3188,19 +3244,26 @@ function deletePage(pageId) {
           const loaded = loadedImages.find((item) => item?.object.id === object.id);
           if (loaded) {
             const width = ((object.width ?? 36) / 100) * output.width;
-            const height = width * (loaded.image.height / loaded.image.width);
+            const crop = object.crop ? cropRectToSource(object.crop, loaded.image.naturalWidth, loaded.image.naturalHeight) : null;
+            const aspectRatio = object.crop
+              ? getCroppedImageAspectRatio(object.crop, loaded.image.naturalWidth, loaded.image.naturalHeight)
+              : loaded.image.height / loaded.image.width;
+            const height = width / aspectRatio;
             context.save();
             context.translate(x, y);
             context.rotate(((object.rotation ?? 0) * Math.PI) / 180);
             context.scale(object.flipHorizontal ? -1 : 1, object.flipVertical ? -1 : 1);
-            context.drawImage(loaded.image, -width / 2, -height / 2, width, height);
+            if (crop) context.drawImage(loaded.image, crop.x, crop.y, crop.width, crop.height, -width / 2, -height / 2, width, height);
+            else context.drawImage(loaded.image, -width / 2, -height / 2, width, height);
             context.restore();
           }
         }
         if (object.type === "image" && object.alphaMask?.paths?.length) {
           const width = ((object.width ?? 36) / 100) * output.width;
           const loaded = loadedImages.find((item) => item?.object.id === object.id);
-          const height = loaded ? width * loaded.image.height / loaded.image.width : width;
+          const height = loaded
+            ? width / (object.crop ? getCroppedImageAspectRatio(object.crop, loaded.image.naturalWidth, loaded.image.naturalHeight) : loaded.image.height / loaded.image.width)
+            : width;
           context.save();
           context.globalCompositeOperation = "destination-in";
           context.translate(x, y);
@@ -3219,7 +3282,7 @@ function deletePage(pageId) {
           if (object.type === "image") {
             maskWidth = ((object.width ?? 36) / 100) * output.width;
             const loaded = loadedImages.find((item) => item?.object.id === object.id);
-            if (loaded) maskHeight = maskWidth * loaded.image.height / loaded.image.width;
+            if (loaded) maskHeight = maskWidth / (object.crop ? getCroppedImageAspectRatio(object.crop, loaded.image.naturalWidth, loaded.image.naturalHeight) : loaded.image.height / loaded.image.width);
           } else if (object.type === "shape" && object.shape === "custom") {
             maskWidth = ((object.width ?? 38) / 100) * output.width;
             maskHeight = ((object.height ?? 38) / 100) * output.height;
@@ -3270,7 +3333,7 @@ function deletePage(pageId) {
           const loaded = loadedImages.find((item) => item?.object.id === object.id);
           if (loaded) {
             const imageWidth = ((object.width ?? 36) / 100) * output.width;
-            const imageHeight = imageWidth * loaded.image.height / loaded.image.width;
+            const imageHeight = imageWidth / (object.crop ? getCroppedImageAspectRatio(object.crop, loaded.image.naturalWidth, loaded.image.naturalHeight) : loaded.image.height / loaded.image.width);
             const angle = (object.rotation ?? 0) * Math.PI / 180;
             const boundsWidth = Math.abs(imageWidth * Math.cos(angle)) + Math.abs(imageHeight * Math.sin(angle));
             const boundsHeight = Math.abs(imageWidth * Math.sin(angle)) + Math.abs(imageHeight * Math.cos(angle));
@@ -3303,8 +3366,9 @@ function deletePage(pageId) {
         onRendered(preview.toDataURL("image/png"));
         return;
       }
-      const mime = format === "jpg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
-      output.toBlob((blob) => {
+      const mime = format === "jpg" || format === "pdf" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+      const quality = format === "jpg" ? getJpegQuality(exportBackground.qualityKey) : format === "pdf" ? 0.95 : format === "png" ? undefined : exportBackground.quality;
+      output.toBlob(async (blob) => {
         if (!blob) {
           const error = new Error("The poster could not be encoded. Try a smaller canvas size.");
           if (onError) onError(error);
@@ -3317,16 +3381,35 @@ function deletePage(pageId) {
           else window.alert(error.message);
           return;
         }
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        link.download = `islamic-poster.${format}`;
-        link.href = url;
-        document.body.append(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        if (typeof exportBackground.onComplete === "function") exportBackground.onComplete({ size: blob.size, format });
-      }, mime, format === "png" ? undefined : (exportBackground.quality ?? 0.85));
+        try {
+          let downloadBlob = blob;
+          if (format === "pdf") {
+            const jpegBytes = new Uint8Array(await blob.arrayBuffer());
+            const pdfBytes = createSinglePageJpegPdf({
+              jpegBytes,
+              pixelWidth: output.width,
+              pixelHeight: output.height,
+              pageWidthPoints: physicalSize.widthIn * 72,
+              pageHeightPoints: physicalSize.heightIn * 72,
+            });
+            downloadBlob = new Blob([pdfBytes], { type: "application/pdf" });
+          }
+          const safeName = (templateName || "qadri-poster").trim().replace(/[^a-zA-Z0-9\u0600-\u06FF_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "qadri-poster";
+          const link = document.createElement("a");
+          const url = URL.createObjectURL(downloadBlob);
+          link.download = `${safeName}.${format}`;
+          link.href = url;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          if (typeof exportBackground.onComplete === "function") exportBackground.onComplete({ size: downloadBlob.size, format });
+        } catch (encodingError) {
+          const error = new Error(encodingError.message || "The requested export could not be prepared.");
+          if (onError) onError(error);
+          else window.alert(error.message);
+        }
+      }, mime, quality);
     }).catch((renderError) => {
       const error = new Error(`Poster preview or export could not be rendered: ${renderError.message || "unknown rendering error"}`);
       if (onError) {
@@ -3339,6 +3422,10 @@ function deletePage(pageId) {
 
   function renderCanvasObject(object, interactive) {
     const vectorShape = object.type === "shape" && (object.shape === "custom" || islamicShapes.some((shape) => shape.id === object.shape));
+    const imageCrop = object.type === "image" && object.crop ? normalizeCropRect(object.crop) : null;
+    const imageAspectRatio = imageCrop
+      ? getCroppedImageAspectRatio(imageCrop, object.naturalWidth ?? 1, object.naturalHeight ?? 1)
+      : undefined;
     const transparencyMasks = [...(object.transparencyMasks ?? []), ...(object.transparencyMask ? [object.transparencyMask] : [])];
     const gradientMask = transparencyMasks.map(transparencyCss).filter(Boolean).join(", ");
     const sourceMask = object.type === "image" ? imageMaskSvg(object.alphaMask) : null;
@@ -3358,6 +3445,7 @@ function deletePage(pageId) {
           top: `${object.y}%`,
           width: object.type === "image" ? `${object.width ?? 36}%` : vectorShape || object.type === "group" ? `${object.width}%` : undefined,
           height: vectorShape || object.type === "group" ? `${object.height}%` : undefined,
+          aspectRatio: imageAspectRatio,
           transform: `translate(-50%, -50%) rotate(${object.rotation ?? 0}deg)`,
         }}
         onPointerDown={interactive && object.type !== "group" ? (event) => moveObject(event, object) : undefined}
@@ -3397,7 +3485,9 @@ function deletePage(pageId) {
             <path d={pathToSvg(object.paths ?? [])} fill={object.fillEnabled === false ? "none" : object.color ?? "#d5ad62"} fillRule={object.fillRule ?? "evenodd"} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeWidth={object.strokeWidth ?? 1} vectorEffect="non-scaling-stroke" />
           </svg>}
           {object.type === "shape" && !vectorShape && <span className={`canvas-shape shape-${object.shape ?? "line"}`} style={{ width: `${object.width ?? 140}px`, height: `${object.height ?? 16}px`, backgroundColor: object.shape === "circle-outline" ? "transparent" : object.color, borderColor: object.color }} />}
-          {object.type === "image" && <img className="canvas-image" src={object.src} alt="Uploaded poster element" />}
+          {object.type === "image" && (imageCrop ? <div className="canvas-image-viewport" style={{ aspectRatio: imageAspectRatio }}>
+            <img className="canvas-image canvas-image--cropped" src={object.src} alt="Cropped poster element" style={{ left: `${-imageCrop.x / imageCrop.width * 100}%`, top: `${-imageCrop.y / imageCrop.height * 100}%`, width: `${100 / imageCrop.width}%`, height: `${100 / imageCrop.height}%` }} />
+          </div> : <img className="canvas-image" src={object.src} alt="Uploaded poster element" />)}
         </div>
         {selected && !object.locked && resizeCorners.map((corner) => (
           <button
@@ -3445,7 +3535,10 @@ function deletePage(pageId) {
             <details id="editor-menu-edit" className="editor-menu" onClick={closeEditorMenuAfterAction}>
               <summary title="Edit and duplicate the selected object" onClick={toggleEditorMenu}><span>✎</span>Edit</summary>
               <div className="editor-menu-panel">
-                {selectedObject?.type === "image" && <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit Image / Background Remover</button>}
+                {selectedObject?.type === "image" && <>
+                  <button type="button" onClick={beginImageCrop}>Crop Image</button>
+                  <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit Image / Background Remover</button>
+                </>}
                 {selectedObject && <button type="button" onClick={() => flipSelected("horizontal")}>Flip Horizontal</button>}
                 {selectedObject && <button type="button" onClick={() => flipSelected("vertical")}>Flip Vertical</button>}
                 <button type="button" disabled={!selectedObject} onClick={duplicateSelected}>Duplicate Selected</button>
@@ -3598,8 +3691,7 @@ function deletePage(pageId) {
             <button type="button" className="delete-selected-action" aria-label="Delete selected object" title="Delete selected object" disabled={!selectedIds.length} onClick={deleteSelectedObjects}><svg aria-hidden="true" viewBox="0 0 24 24" focusable="false"><path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7m4 3v7m4-7v7" /></svg><span className="history-action-label">Delete</span></button>
           </div>
           <div className="export-actions" aria-label="Export options">
-            <button type="button" title="Export as JPEG" onClick={() => openExport("jpg")}>JPG</button>
-            <button type="button" className="export-primary" title="Open PNG export settings" onClick={() => openExport("png")}>Export PNG</button>
+            <button type="button" className="export-primary" title="Export as PNG, JPG or PDF" onClick={() => openExport("png")}>Export</button>
           </div>
           <input ref={uploadRef} className="file-input" type="file" accept="image/*" onChange={uploadImage} />
           <input ref={backgroundUploadRef} className="file-input" type="file" accept="image/*" onChange={uploadBackgroundImage} />
@@ -3614,10 +3706,19 @@ function deletePage(pageId) {
                   {Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}
                   <option value="Custom">Custom dimensions</option>
                 </select></label>
+                <label htmlFor="canvas-unit">Units<select id="canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}>
+                  <option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option>
+                </select></label>
                 {canvasSize === "Custom" && <div className="custom-size-fields">
-                  <label>W<input type="number" min="1" max="5000" value={customWidth} onChange={(event) => setCustomWidth(Math.max(1, Math.min(5000, Number(event.target.value) || 1)))} /></label>
-                  <label>H<input type="number" min="1" max="5000" value={customHeight} onChange={(event) => setCustomHeight(Math.max(1, Math.min(5000, Number(event.target.value) || 1)))} /></label>
+                  <label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label>
+                  <label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label>
                 </div>}
+                {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}
+                {canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
+                <label htmlFor="print-dpi">Print resolution<select id="print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
+                <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span>
+                <small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>
+                {dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
               </div>
             </div>
             <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
@@ -3991,6 +4092,7 @@ function deletePage(pageId) {
               <p className="panel-hint">Drag the shape on the canvas to position it.</p>
             </>}
             {selectedObject?.type === "image" && <>
+              <button className="replace-image-btn" type="button" onClick={beginImageCrop}>Crop image</button>
               <button className="replace-image-btn" type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit image / Remove background</button>
               <button className="replace-image-btn" onClick={() => uploadRef.current?.click()}>Replace image</button>
               <label className="field-label" htmlFor="image-size">Image width <span>{selectedObject.width ?? 36}%</span></label>
@@ -4093,7 +4195,16 @@ function deletePage(pageId) {
           <ExportSettings
             initialFormat={exportInitialFormat}
             onExport={downloadPoster}
+            printResolution={Math.round(previewExportDimensions.effectiveDpi)}
             onClose={() => setExportDialogOpen(false)}
+          />
+        )}
+        {cropImageId && findObject(objects, cropImageId)?.type === "image" && (
+          <ImageCropEditor
+            src={findObject(objects, cropImageId).src}
+            initialCrop={findObject(objects, cropImageId).crop}
+            onApply={applyImageCrop}
+            onCancel={() => setCropImageId(null)}
           />
         )}
       </div>

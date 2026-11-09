@@ -3688,3 +3688,36 @@ body {
   .stage-heading h1, .size-picker > label { font-size: 10px; }
   .canvas-caption { display: none; }
 }
+
+/* Shared dimension controls and cropped image viewport. */
+.size-picker {
+  max-width: min(72vw, 760px);
+  display: grid;
+  grid-template-columns: minmax(150px, 1.7fr) repeat(2, minmax(88px, 1fr));
+  align-items: end;
+  gap: 6px;
+}
+
+.size-picker-physical,
+.size-picker-print,
+.size-picker-help,
+.size-picker-error { grid-column: 1 / -1; }
+.size-picker-physical { color: #345342; font-size: 11px; font-weight: 700; }
+.size-picker-print { color: #4d6255; font-size: 10px; }
+.size-picker-help { color: #758078; font-size: 9px; }
+.size-picker-error { color: #a4262c; font-size: 11px; }
+.canvas-object-content--image { width: 100%; height: 100%; min-width: 0; overflow: hidden; }
+.canvas-image-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.canvas-image--cropped { position: absolute; display: block; max-width: none; object-fit: fill; }
+
+@media (max-width: 900px) {
+  .size-picker { max-width: min(70vw, 620px); grid-template-columns: minmax(130px, 1.5fr) repeat(2, minmax(76px, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .stage-heading { display: grid; grid-template-columns: 1fr; gap: 7px; white-space: normal; }
+  .size-picker { width: 100%; max-width: none; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  .size-picker-physical, .size-picker-print, .size-picker-help, .size-picker-error { grid-column: 1 / -1; }
+  .size-picker > label { min-width: 0; font-size: 10px; }
+  .size-picker select, .size-picker input { width: 100%; min-width: 0; }
+}
