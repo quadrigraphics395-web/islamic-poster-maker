@@ -54,8 +54,8 @@ test("invalid template names and preview data are rejected", () => {
   assert.throws(() => createTemplateRecord("Design", "Other", project, "blob:preview"), /persistent preview/);
 });
 
-test("local template management is gated by explicit local admin mode", () => {
+test("client-side mode can never grant template administration", () => {
   assert.equal(canManageTemplates(false), false);
-  assert.equal(canManageTemplates(true), true);
+  assert.equal(canManageTemplates(true), false);
   assert.equal(canManageTemplates("true"), false);
 });

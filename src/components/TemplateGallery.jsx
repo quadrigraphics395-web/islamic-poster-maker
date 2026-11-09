@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import "./TemplateSystem.css";
 
-export default function TemplateGallery({ builtIns, templates, onSelect, adminMode }) {
+export default function TemplateGallery({ builtIns, templates, onSelect, adminMode, loadingTemplateId }) {
   const [category, setCategory] = useState("All");
+  const [search, setSearch] = useState("");
   const [active, setActive] = useState(null);
   const [failedPreviews, setFailedPreviews] = useState({});
   const categories = useMemo(() => [
@@ -14,8 +15,9 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
   ], [builtIns, templates]);
   const entries = [
     ...builtIns.map((template) => ({ ...template, source: "built-in" })),
-    ...templates.map((template) => ({ ...template, source: "saved" })),
-  ].filter((template) => category === "All" || template.category === category);
+    ...templates.map((template) => ({ ...template, source: template.source || "saved" })),
+  ].filter((template) => (category === "All" || template.category === category)
+    && `${template.name} ${template.description || ""} ${template.category}`.toLowerCase().includes(search.toLowerCase()));
 
   function editTemplate(template) {
     setActive(null);
@@ -30,16 +32,19 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
             {categories.map((item) => <option key={item}>{item}</option>)}
           </select>
         </label>
+        <label>Search
+          <input className="template-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search templates" />
+        </label>
         <span>{entries.length} templates</span>
         {adminMode && <span className="template-admin-badge">Local creator mode</span>}
       </div>
       <div className="templates template-gallery">
         {entries.map((template) => (
           <button type="button" key={`${template.source}-${template.id}`} className="template template-gallery-card" onClick={() => setActive(template)} aria-label={`Preview ${template.name} template`}>
-            {template.source === "saved"
+            {template.source !== "built-in"
               ? failedPreviews[template.id]
                 ? <span className="template-preview-failure" role="alert">Preview unavailable</span>
-                : <img src={template.preview} alt="" onError={() => setFailedPreviews((current) => ({ ...current, [template.id]: true }))} />
+                : <img loading="lazy" src={template.preview} alt="" onError={() => setFailedPreviews((current) => ({ ...current, [template.id]: true }))} />
               : <span className="template-built-in-preview" style={{ "--template-background": template.background, "--template-accent": template.accent, "--template-text": template.textColor }}>
                   <strong>{template.name}</strong><span dir="auto">{template.text}</span><small>{template.subtitle}</small>
                 </span>}
@@ -58,7 +63,7 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
               <button type="button" aria-label="Close template preview" onClick={() => setActive(null)}>×</button>
             </header>
             <div className="template-detail-preview">
-              {active.source === "saved"
+              {active.source !== "built-in"
                 ? failedPreviews[active.id]
                   ? <p className="template-preview-failure" role="alert">This saved preview could not be decoded. The editable template data is still retained.</p>
                   : <img src={active.preview} alt={`${active.name} full preview`} onError={() => setFailedPreviews((current) => ({ ...current, [active.id]: true }))} />
@@ -66,10 +71,10 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
                     <strong>{active.name}</strong><span dir="auto">{active.text}</span><small>{active.subtitle}</small>
                   </div>}
             </div>
-            {active.source === "saved" && <p className="template-local-notice">This opens a working copy. Editing or saving a project does not change the original template.</p>}
+            {active.source !== "built-in" && <p className="template-local-notice">This opens a working copy. Editing or saving a project does not change the original template.</p>}
             <footer className="template-modal-footer">
               <button type="button" onClick={() => setActive(null)}>Cancel</button>
-              <button className="template-primary" type="button" onClick={() => editTemplate(active)}>Edit Template</button>
+              <button className="template-primary" type="button" disabled={loadingTemplateId === active.id} onClick={() => editTemplate(active)}>{loadingTemplateId === active.id ? "Loading…" : "Edit Template"}</button>
             </footer>
           </section>
         </div>

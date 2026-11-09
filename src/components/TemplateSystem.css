@@ -69,6 +69,17 @@
   cursor: pointer;
 }
 
+.template-gallery-tools .template-search {
+  min-height: 38px;
+  padding: 7px 11px;
+  border: 1px solid #d6dfd8;
+  border-radius: 7px;
+  font: inherit;
+}
+
+.template-manager-fields .template-check { display: flex; align-items: center; gap: 8px; }
+.template-manager-fields .template-check input { width: auto; }
+
 .template-modal button:disabled {
   opacity: .48;
   cursor: not-allowed;
@@ -158,6 +169,8 @@
   color: #a3483d;
   font-size: 12px;
 }
+
+.template-upload-status { margin: 0; color: #176b4d; font-size: 12px; font-weight: 700; }
 
 .template-manager-modal {
   width: min(920px, 100%);

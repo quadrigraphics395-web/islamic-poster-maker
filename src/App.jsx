@@ -8,7 +8,6 @@ import TemplateManager from "./components/TemplateManager.jsx";
 import TemplateSaveDialog from "./components/TemplateSaveDialog.jsx";
 import { resizeObjectFromCorner } from "./utils/objectGeometry.js";
 import { createProjectRecord, readProjects, writeProjects } from "./utils/projectStorage.js";
-import { canManageTemplates } from "./utils/templatePermissions.js";
 import { createTemplateRecord, deleteTemplate, readTemplates, writeTemplate } from "./utils/templateStorage.js";
 import svgPathParser from "svg-path-parser";
 import { applyBooleanGeometry, createBooleanVector, flattenVectorPath, pathToSvg, simplifyPolyline } from "./utils/vectorGeometry.js";
@@ -16,6 +15,7 @@ import { defaultTransparencyStops, imageMaskSvg, normalizeTransparencyMask, tran
 import { builtInFonts } from "./fontLibrary.js";
 import { deletePersonalFont, listPersonalFonts, preparePersonalFont, savePersonalFont } from "./utils/personalFonts.js";
 import { removeObjectsById, transformEffectOffset } from "./utils/objectOperations.js";
+import { adminSignIn, adminSignOut, checkAdminSession, cleanupOnlineAssets, deleteOnlineTemplate, getOnlineTemplate, listOnlineTemplates, onlineTemplatesConfigured, saveOnlineTemplate, updateOnlineTemplate } from "./utils/onlineTemplates.js";
 
 const canvasSizes = {
   "Instagram Post 1080x1080": { width: 1080, height: 1080 },
@@ -715,24 +715,6 @@ useEffect(() => {
 
 }, [objects]);
 
-useEffect(() => {
-  let active = true;
-  readTemplates()
-    .then((templates) => {
-      if (!active) return;
-      setSavedTemplates(templates);
-      setTemplateStorageError("");
-    })
-    .catch((loadError) => {
-      if (!active) return;
-      setTemplateStorageError(loadError.message || "Saved templates could not be loaded.");
-    })
-    .finally(() => {
-      if (active) setTemplateStorageLoading(false);
-    });
-  return () => { active = false; };
-}, []);
-
   const [selectedId, setSelectedId] = useState(null);
   const [editingImageId, setEditingImageId] = useState(null);
   const [templateName, setTemplateName] = useState("Create New Poster");
@@ -742,22 +724,56 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportInitialFormat, setExportInitialFormat] = useState("png");
-  const [localAdminMode, setLocalAdminMode] = useState(false);
+  const [isTemplateAdmin, setIsTemplateAdmin] = useState(false);
+  const [adminLoginOpen, setAdminLoginOpen] = useState(false);
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminLoginError, setAdminLoginError] = useState("");
+  const [adminLoginBusy, setAdminLoginBusy] = useState(false);
+  const [templateUploadProgress, setTemplateUploadProgress] = useState(null);
   const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
   const [templateSaveOpen, setTemplateSaveOpen] = useState(false);
+  const [templateSaveTarget, setTemplateSaveTarget] = useState("local");
   const [templatePreview, setTemplatePreview] = useState("");
   const [savedTemplates, setSavedTemplates] = useState([]);
   const [templateStorageError, setTemplateStorageError] = useState("");
   const [templateStorageLoading, setTemplateStorageLoading] = useState(true);
+  const [onlineTemplatesLoading, setOnlineTemplatesLoading] = useState(onlineTemplatesConfigured);
+  const [openingTemplateId, setOpeningTemplateId] = useState(null);
   const [savedProjects, setSavedProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [activeProjectName, setActiveProjectName] = useState("");
   const [projectStorageError, setProjectStorageError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    checkAdminSession().then((admin) => listOnlineTemplates(admin).then((online) => [admin, online])).then(([admin, online]) => {
+      if (!active) return;
+      setIsTemplateAdmin(admin);
+      setSavedTemplates((current) => [...current.filter((template) => template.source !== "online"), ...online]);
+    }).catch((error) => {
+      if (active && onlineTemplatesConfigured) setTemplateStorageError(error.message || "Online templates could not be loaded.");
+    }).finally(() => { if (active) setOnlineTemplatesLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    readTemplates().then((templates) => {
+      if (!active) return;
+      setSavedTemplates((current) => [...templates, ...current.filter((template) => template.source === "online")]);
+      setTemplateStorageError("");
+    }).catch((loadError) => {
+      if (active) setTemplateStorageError(loadError.message || "Saved templates could not be loaded.");
+    }).finally(() => { if (active) setTemplateStorageLoading(false); });
+    return () => { active = false; };
+  }, []);
   const uploadRef = useRef(null);
   const backgroundUploadRef = useRef(null);
   const textFillUploadRef = useRef(null);
   const projectUploadRef = useRef(null);
   const canvasRef = useRef(null);
+  const projectExtrasRef = useRef({});
   const dragRef = useRef(null);
   const canvasPointersRef = useRef(new Map());
   const pinchRef = useRef(null);
@@ -801,7 +817,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     return null;
   };
   const selectedObject = findObject(objects, selectedId);
-  const canEditTemplates = canManageTemplates(localAdminMode);
+  const canEditTemplates = isTemplateAdmin;
   const selectedShapeIsVector = selectedObject?.type === "shape" && (selectedObject.shape === "custom" || islamicShapes.some((shape) => shape.id === selectedObject.shape));
   const selectedLayerIndex = objects.findIndex((object) => object.id === selectedId);
   const dimensions = canvasSize === "Custom"
@@ -1177,6 +1193,7 @@ function deletePage(pageId) {
   }
 
   function resetProjectState() {
+    projectExtrasRef.current = {};
     resetPoster();
     setCanvasViewOffset({ x: 0, y: 0 });
     setPages([{ id: 1, name: "Page 1", objects: [] }]);
@@ -2592,6 +2609,7 @@ function deletePage(pageId) {
       page.id === currentPageId ? { ...page, objects } : page
     ));
     return {
+      ...projectExtrasRef.current,
       version: 2,
       canvasSize,
       customWidth,
@@ -2628,10 +2646,14 @@ function deletePage(pageId) {
   }
 
   async function refreshTemplateList() {
-    const templates = await readTemplates();
-    setSavedTemplates(templates);
-    setTemplateStorageError("");
-    return templates;
+    setOnlineTemplatesLoading(true);
+    try {
+      const templates = await readTemplates();
+      const online = await listOnlineTemplates(canEditTemplates);
+      setSavedTemplates([...templates, ...online]);
+      setTemplateStorageError("");
+      return templates;
+    } finally { setOnlineTemplatesLoading(false); }
   }
 
   function createTemplatePreview() {
@@ -2663,12 +2685,13 @@ function deletePage(pageId) {
     })));
   }
 
-  async function openSaveTemplateDialog() {
-    if (!canEditTemplates) return;
+  async function openSaveTemplateDialog(target = "local") {
+    if (target === "online" && !canEditTemplates) return;
     setTemplateStorageError("");
     try {
       await verifyTemplateAssets(captureProject());
       setTemplatePreview(await createTemplatePreview());
+      setTemplateSaveTarget(target);
       setTemplateSaveOpen(true);
     } catch (previewError) {
       setTemplateStorageError(previewError.message || "The poster preview could not be created.");
@@ -2676,21 +2699,31 @@ function deletePage(pageId) {
   }
 
   async function persistTemplate(name, category) {
-    if (!canEditTemplates) throw new Error("Enable Local Admin Mode to manage templates.");
     const project = captureProject();
     await verifyTemplateAssets(project);
-    const currentTemplates = await readTemplates();
-    const order = currentTemplates.reduce((highest, template) => Math.max(highest, template.order ?? -1), -1) + 1;
-    const record = createTemplateRecord(name, category, project, templatePreview, null, order);
-    await writeTemplate(record);
+    if (templateSaveTarget === "local") {
+      const template = createTemplateRecord(name, category, project, templatePreview);
+      await writeTemplate(template);
+      await refreshTemplateList();
+      return;
+    }
+    if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
+    try {
+      await saveOnlineTemplate({ name, category, project, preview: templatePreview, published: false }, null, setTemplateUploadProgress);
+    } finally { setTemplateUploadProgress(null); }
     await refreshTemplateList();
   }
 
   async function updateTemplateMetadata(template, values) {
-    if (!canEditTemplates) throw new Error("Enable Local Admin Mode to manage templates.");
     const name = values.name.trim();
     const category = values.category.trim();
     if (!name || !category) throw new Error("Template name and category are required.");
+    if (template.source === "online") {
+      if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
+      await updateOnlineTemplate(template, values);
+      await refreshTemplateList();
+      return;
+    }
     const templates = await readTemplates();
     const existing = templates.find((item) => item.id === template.id);
     if (!existing) throw new Error("That template no longer exists. Refresh the template list and try again.");
@@ -2699,7 +2732,11 @@ function deletePage(pageId) {
   }
 
   async function moveTemplate(templateId, direction) {
-    if (!canEditTemplates) throw new Error("Enable Local Admin Mode to manage templates.");
+    const selectedTemplate = savedTemplates.find((template) => template.id === templateId);
+    if (selectedTemplate?.source === "online") {
+      if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
+      return;
+    }
     const templates = await readTemplates();
     const index = templates.findIndex((template) => template.id === templateId);
     const nextIndex = index + direction;
@@ -2712,7 +2749,14 @@ function deletePage(pageId) {
   }
 
   async function replaceTemplate(template) {
-    if (!canEditTemplates) throw new Error("Enable Local Admin Mode to manage templates.");
+    if (template.source === "online") {
+      if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
+      const project = captureProject();
+      await verifyTemplateAssets(project);
+      await saveOnlineTemplate({ ...template, project, preview: await createTemplatePreview() }, template.id);
+      await refreshTemplateList();
+      return;
+    }
     const templates = await readTemplates();
     const existing = templates.find((item) => item.id === template.id);
     if (!existing) throw new Error("That template no longer exists. Refresh the template list and try again.");
@@ -2735,7 +2779,12 @@ function deletePage(pageId) {
   }
 
   async function removeTemplate(template) {
-    if (!canEditTemplates) throw new Error("Enable Local Admin Mode to manage templates.");
+    if (template.source === "online") {
+      if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
+      await deleteOnlineTemplate({ ...template, project: template.asset_project });
+      await refreshTemplateList();
+      return;
+    }
     const templates = await readTemplates();
     const existing = templates.find((item) => item.id === template.id);
     if (!existing) throw new Error("That template no longer exists. Refresh the template list and try again.");
@@ -2744,7 +2793,21 @@ function deletePage(pageId) {
     await refreshTemplateList();
   }
 
+  async function cleanupSharedAssets() {
+    if (!canEditTemplates) throw new Error("Sign in as an administrator to clean shared assets.");
+    const result = await cleanupOnlineAssets();
+    return result.cleaned;
+  }
+
   async function openSavedTemplate(template) {
+    if (template.source === "online") {
+      const project = await getOnlineTemplate(template.id);
+      await verifyTemplateAssets(project);
+      const workingCopy = JSON.parse(JSON.stringify(project));
+      workingCopy.templateName = template.name;
+      applyProject(workingCopy, null, "");
+      return;
+    }
     const storedTemplates = await readTemplates();
     const storedTemplate = storedTemplates.find((item) => item.id === template.id);
     if (!storedTemplate) throw new Error("That template no longer exists. Refresh the gallery and try again.");
@@ -2754,14 +2817,28 @@ function deletePage(pageId) {
     applyProject(workingCopy, null, "");
   }
 
-  function selectTemplate(template) {
-    if (template.source === "saved") {
-      openSavedTemplate(template).catch((loadError) => {
+  async function selectTemplate(template) {
+    if (template.source === "saved" || template.source === "online") {
+      setOpeningTemplateId(template.id);
+      try {
+        await openSavedTemplate(template);
+      } catch (loadError) {
         setTemplateStorageError(loadError.message || "This template could not be opened.");
-      });
+      } finally { setOpeningTemplateId(null); }
       return;
     }
     openTemplate(template);
+  }
+
+  async function handleAdminLogin(event) {
+    event.preventDefault(); setAdminLoginError(""); setAdminLoginBusy(true);
+    try {
+      await adminSignIn(adminEmail, adminPassword);
+      setIsTemplateAdmin(true); setAdminLoginOpen(false); setAdminPassword("");
+      const online = await listOnlineTemplates(true);
+      setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online]);
+    } catch (error) { setAdminLoginError(error.message || "Admin login failed."); }
+    finally { setAdminLoginBusy(false); }
   }
 
   function updateProject(projectId) {
@@ -2847,6 +2924,21 @@ function deletePage(pageId) {
 
   function applyProject(project, projectId = null, projectName = "") {
     if (!project || typeof project !== "object") throw new Error("This project file does not contain a valid poster.");
+    const projectFields = new Set(["version", "canvasSize", "customWidth", "customHeight", "background", "backgroundMode", "backgroundImage", "backgroundGradientColors", "backgroundGradientThirdEnabled", "backgroundGradientAngle", "selectedIslamicBackgroundId", "backgroundOverlayEnabled", "backgroundOverlayOpacity", "objects", "pages", "currentPageId", "templateName", "snapGridEnabled"]);
+    projectExtrasRef.current = Object.fromEntries(Object.entries(project).filter(([key]) => !projectFields.has(key)));
+    if (Array.isArray(project.customFonts)) {
+      project.customFonts.forEach((font) => {
+        try {
+          if (typeof font.src !== "string" || !font.src.startsWith("data:")) return;
+          const [metadata, encoded] = font.src.split(",", 2);
+          const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+          const blob = new Blob([bytes], { type: metadata.slice(5).split(";")[0] });
+          const face = new FontFace(font.family, blob, { weight: String(font.weight || 400) });
+          face.load().then((loaded) => document.fonts.add(loaded));
+          savePersonalFont({ id: font.id || crypto.randomUUID(), family: font.family, weight: font.weight || 400, fileName: font.fileName || `${font.family}.ttf`, blob, addedAt: Date.now() }).then(() => listPersonalFonts().then(setPersonalFonts)).catch(() => {});
+        } catch { /* Keep the editable template even when a custom font cannot be loaded. */ }
+      });
+    }
     setCanvasViewOffset({ x: 0, y: 0 });
     setCanvasSize(project.canvasSize || "Square 1080x1080");
     setCustomWidth(project.customWidth || 1080);
@@ -3468,8 +3560,9 @@ function deletePage(pageId) {
                 <button type="button" onClick={createNewProject}>New Project</button>
                 <button type="button" onClick={saveProject}>Save Project</button>
                 <button type="button" onClick={openProjectsDialog}>My Projects</button>
+                <button type="button" onClick={() => openSaveTemplateDialog("local")}>Save as Local Template</button>
                 {canEditTemplates && <>
-                  <button type="button" onClick={openSaveTemplateDialog}>Save as Template</button>
+                  <button type="button" onClick={() => openSaveTemplateDialog("online")}>Save as Shared Template</button>
                   <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Templates</button>
                 </>}
                 <button type="button" onClick={() => projectUploadRef.current?.click()}>Open JSON Project</button>
@@ -3975,12 +4068,14 @@ function deletePage(pageId) {
             onDownloadBackup={downloadProjectBackup}
           />
         )}
-        {templateSaveOpen && canEditTemplates && (
+        {templateSaveOpen && (
           <TemplateSaveDialog
             preview={templatePreview}
             categories={[...new Set(savedTemplates.map((template) => template.category))]}
             initialName={templateName}
             onSave={persistTemplate}
+            shared={templateSaveTarget === "online"}
+            uploadProgress={templateUploadProgress}
             onClose={() => setTemplateSaveOpen(false)}
           />
         )}
@@ -4031,22 +4126,34 @@ function deletePage(pageId) {
           </button>
         </section>
 
-        <section className="local-admin-controls" aria-label="Local template creator mode">
+        <section className="local-admin-controls" aria-label="Template administration">
           <div>
-            <strong>{canEditTemplates ? "Local Template Creator Mode: On" : "Template Gallery"}</strong>
-            <p>{canEditTemplates
-              ? "Creator controls are enabled only in this browser session; this is not online authentication."
-              : "Browse and edit templates as working copies. Only enable creator mode on a device you control."}</p>
+            <strong>{canEditTemplates ? "Template administrator signed in" : "Template Gallery"}</strong>
+            <p>{canEditTemplates ? "Shared template changes are checked by the Cloudflare API." : "Browse published templates and open an editable copy."}</p>
           </div>
           <div>
-            <button type="button" aria-pressed={localAdminMode} onClick={() => setLocalAdminMode((enabled) => !enabled)}>
-              {canEditTemplates ? "Turn Off Creator Mode" : "Enable Local Creator Mode"}
-            </button>
+            {canEditTemplates
+              ? <button type="button" onClick={() => { void adminSignOut(); setIsTemplateAdmin(false); listOnlineTemplates(false).then((online) => setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online])); }}>Admin Sign Out</button>
+              : <button type="button" disabled={!onlineTemplatesConfigured} onClick={() => setAdminLoginOpen(true)}>Admin Login</button>}
             {canEditTemplates && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Templates</button>}
+            {!canEditTemplates && savedTemplates.some((template) => template.source !== "online") && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Local Templates</button>}
           </div>
         </section>
+        {!onlineTemplatesConfigured && <p className="template-storage-status">Online template gallery is not configured. Set VITE_TEMPLATE_API_URL to enable shared templates.</p>}
+        {adminLoginOpen && <div className="template-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdminLoginOpen(false); }}>
+          <form className="template-modal template-save-modal" onSubmit={handleAdminLogin}>
+            <header className="template-modal-header"><div><span>SECURE ADMIN ACCESS</span><h2>Admin Login</h2></div><button type="button" onClick={() => setAdminLoginOpen(false)}>×</button></header>
+            <div className="template-save-content">
+              <label>Email<input type="email" autoComplete="username" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} /></label>
+              <label>Admin access key<input type="password" autoComplete="current-password" required value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} /></label>
+              {adminLoginError && <p className="template-error" role="alert">{adminLoginError}</p>}
+            </div>
+            <footer className="template-modal-footer"><button type="button" onClick={() => setAdminLoginOpen(false)}>Cancel</button><button className="template-primary" type="submit" disabled={adminLoginBusy}>{adminLoginBusy ? "Signing in…" : "Sign In"}</button></footer>
+          </form>
+        </div>}
         {templateStorageLoading && <p className="template-storage-status">Loading local templates…</p>}
-        {templateStorageError && <p className="template-storage-error" role="alert">{templateStorageError}</p>}
+        {onlineTemplatesLoading && <p className="template-storage-status" role="status">Loading shared templates…</p>}
+        {templateStorageError && <div className="template-storage-error" role="alert"><span>{templateStorageError}</span><button type="button" disabled={!onlineTemplatesConfigured} onClick={() => refreshTemplateList().catch((error) => setTemplateStorageError(error.message || "Templates could not be refreshed."))}>Retry</button></div>}
 
         <h2 className="section-title">Categories</h2>
 
@@ -4065,17 +4172,19 @@ function deletePage(pageId) {
           templates={savedTemplates}
           onSelect={selectTemplate}
           adminMode={canEditTemplates}
+          loadingTemplateId={openingTemplateId}
         />
       </main>
 
-      {templateManagerOpen && canEditTemplates && (
+      {templateManagerOpen && (canEditTemplates || savedTemplates.some((template) => template.source !== "online")) && (
         <TemplateManager
-          templates={savedTemplates}
+          templates={canEditTemplates ? savedTemplates : savedTemplates.filter((template) => template.source !== "online")}
           onClose={() => setTemplateManagerOpen(false)}
           onMetadataChange={updateTemplateMetadata}
           onMove={moveTemplate}
           onReplace={replaceTemplate}
           onDelete={removeTemplate}
+          onCleanup={canEditTemplates ? cleanupSharedAssets : undefined}
         />
       )}
 
