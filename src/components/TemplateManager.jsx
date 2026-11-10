@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { clearTemplateEdit, getTemplateManagerValues, runTemplateAction } from "../utils/templateManagerActions.js";
 import "./TemplateSystem.css";
 
 export default function TemplateManager({ templates, onClose, onMetadataChange, onMove, onReplace, onDelete }) {
@@ -7,17 +8,9 @@ export default function TemplateManager({ templates, onClose, onMetadataChange, 
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState(null);
 
-  async function runAction(template, action) {
-    setError("");
-    setBusyId(template.id);
-    try {
-      await action(template);
-      setPendingAction(null);
-    } catch (actionError) {
-      setError(actionError.message || "Template changes could not be saved.");
-    } finally {
-      setBusyId(null);
-    }
+  async function runAction(template, action, { onSuccess, onFailure } = {}) {
+    const succeeded = await runTemplateAction(template, action, { setBusyId, setError, onSuccess, onFailure });
+    if (succeeded) setPendingAction(null);
   }
 
   return (
@@ -32,9 +25,9 @@ export default function TemplateManager({ templates, onClose, onMetadataChange, 
         <p className="template-local-notice">Shared templates are managed online. Existing browser-local templates remain stored on this device.</p>
         {error && <p className="template-error" role="alert">{error}</p>}
         <div className="template-manager-list">
-          {templates.length === 0 && <p className="template-empty">No saved templates yet. Create a poster and choose Save as Template.</p>}
+          {templates.length === 0 && <p className="template-empty">No saved templates yet.</p>}
           {templates.map((template, index) => {
-            const values = editing[template.id] ?? { name: template.name, category: template.category, description: template.description || "", featured: Boolean(template.featured), published: Boolean(template.published) };
+            const values = getTemplateManagerValues(template, editing);
             const pending = pendingAction?.id === template.id ? pendingAction.type : null;
             return (
               <article className="template-manager-item" key={template.id}>
@@ -52,7 +45,18 @@ export default function TemplateManager({ templates, onClose, onMetadataChange, 
                     <label className="template-check"><input type="checkbox" checked={values.published} onChange={(event) => setEditing((current) => ({ ...current, [template.id]: { ...values, published: event.target.checked } }))} /> Published</label>
                   </>}
                   <div className="template-manager-actions">
-                    <button type="button" disabled={busyId === template.id} onClick={() => runAction(template, () => onMetadataChange(template, values))}>Save Details</button>
+                    <button
+                      type="button"
+                      disabled={busyId === template.id}
+                      onClick={() => runAction(
+                        template,
+                        () => onMetadataChange(template, values),
+                        {
+                          onSuccess: () => setEditing((current) => clearTemplateEdit(current, template.id)),
+                          onFailure: () => setEditing((current) => clearTemplateEdit(current, template.id)),
+                        },
+                      )}
+                    >Save Details</button>
                     {template.source !== "online" && <><button type="button" disabled={index === 0 || busyId === template.id} aria-label={`Move ${template.name} up`} onClick={() => runAction(template, () => onMove(template.id, -1))}>↑ Order</button>
                     <button type="button" disabled={index === templates.length - 1 || busyId === template.id} aria-label={`Move ${template.name} down`} onClick={() => runAction(template, () => onMove(template.id, 1))}>↓ Order</button></>}
                     <button type="button" disabled={busyId === template.id} onClick={() => setPendingAction({ id: template.id, type: "replace" })}>Update / Replace</button>

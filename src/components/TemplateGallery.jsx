@@ -1,24 +1,15 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import "./TemplateSystem.css";
 
-export default function TemplateGallery({ builtIns, templates, onSelect, adminMode, loadingTemplateId }) {
+export default function TemplateGallery({ templates, onSelect, loadingTemplateId }) {
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [active, setActive] = useState(null);
   const [failedPreviews, setFailedPreviews] = useState({});
-  const categories = useMemo(() => [
-    "All",
-    ...new Set([
-      ...builtIns.map((template) => template.category),
-      ...templates.map((template) => template.category),
-    ]),
-  ], [builtIns, templates]);
-  const entries = [
-    ...builtIns.map((template) => ({ ...template, source: "built-in" })),
-    ...templates.map((template) => ({ ...template, source: template.source || "saved" })),
-  ].filter((template) => (category === "All" || template.category === category)
-    && `${template.name} ${template.description || ""} ${template.category}`.toLowerCase().includes(search.toLowerCase()));
-
+  const publishedTemplates = templates.filter((template) => template?.source === "online" && template.published === true);
+  const categories = ["All", ...new Set(publishedTemplates.map((template) => template.category).filter(Boolean))];
+  const entries = publishedTemplates.filter((template) => (category === "All" || template.category === category)
+    && `${template.name} ${template.description || ""} ${template.category || ""}`.toLowerCase().includes(search.toLowerCase()));
   function editTemplate(template) {
     setActive(null);
     onSelect(template);
@@ -36,7 +27,6 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
           <input className="template-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search templates" />
         </label>
         <span>{entries.length} templates</span>
-        {adminMode && <span className="template-admin-badge">Local creator mode</span>}
       </div>
       <div className="templates template-gallery">
         {entries.map((template) => (
@@ -51,7 +41,7 @@ export default function TemplateGallery({ builtIns, templates, onSelect, adminMo
             <span className="template-gallery-meta"><strong>{template.name}</strong><small>{template.category}</small></span>
           </button>
         ))}
-        {entries.length === 0 && <p className="template-empty">No templates in this category yet.</p>}
+        {entries.length === 0 && <p className="template-empty">{publishedTemplates.length === 0 ? "Templates will appear here soon." : "No templates match your search."}</p>}
       </div>
       {active && (
         <div className="template-modal-backdrop" onMouseDown={(event) => {

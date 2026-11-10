@@ -10,7 +10,12 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+**/.wrangler/
 *.local
+.dev.vars
+.dev.vars.*
+cloudflare/worker/.env.production
+cloudflare/worker/.admin-login-key.local
 
 # Editor directories and files
 .vscode/*

@@ -1,5 +1,16 @@
-const apiUrl = import.meta.env.VITE_TEMPLATE_API_URL?.replace(/\/$/, "");
+import { readAdminSessionToken, verifyAdminSession, writeAdminSessionToken } from "./adminExperience.js";
+
+const apiUrl = import.meta.env?.VITE_TEMPLATE_API_URL?.replace(/\/$/, "");
 let adminToken = null;
+
+function currentAdminToken() {
+  if (!adminToken) adminToken = readAdminSessionToken();
+  return adminToken;
+}
+function updateAdminToken(token) {
+  adminToken = token;
+  writeAdminSessionToken(token);
+}
 
 export const onlineTemplatesConfigured = Boolean(apiUrl);
 
@@ -7,7 +18,7 @@ function requireConfig() {
   if (!onlineTemplatesConfigured) throw new Error("Online templates are not configured. Set VITE_TEMPLATE_API_URL to the Cloudflare Worker API URL.");
 }
 
-async function request(path, { method = "GET", body, token = adminToken, headers = {} } = {}) {
+async function request(path, { method = "GET", body, token = currentAdminToken(), headers = {} } = {}) {
   requireConfig();
   let response;
   try {
@@ -29,7 +40,7 @@ async function request(path, { method = "GET", body, token = adminToken, headers
 }
 
 async function assetDataUrl(id, admin = false) {
-  const response = await request(`/api/assets/${encodeURIComponent(id)}`, { token: admin ? adminToken : null });
+  const response = await request(`/api/assets/${encodeURIComponent(id)}`, { token: admin ? currentAdminToken() : null });
   const blob = await response.blob();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -88,45 +99,42 @@ async function loadRows(rows, admin) {
 
 export async function adminSignIn(email, password) {
   const result = await request("/api/admin/login", { method: "POST", body: { email, password }, token: null });
-  adminToken = result.token;
+  updateAdminToken(result.token);
   try {
     const state = await request("/api/admin/session");
     if (!state.authenticated) throw new Error("Administrator session could not be verified.");
   } catch (error) {
-    adminToken = null;
+    updateAdminToken(null);
     throw error;
   }
 }
 
 export async function adminSignOut() {
-  const token = adminToken;
-  adminToken = null;
+  const token = currentAdminToken();
+  updateAdminToken(null);
   if (onlineTemplatesConfigured && token) await request("/api/admin/session", { method: "DELETE", token }).catch(() => {});
 }
 
 export async function checkAdminSession() {
-  if (!adminToken) return false;
-  try {
-    const authenticated = Boolean((await request("/api/admin/session")).authenticated);
-    if (!authenticated) adminToken = null;
-    return authenticated;
-  }
-  catch { adminToken = null; return false; }
+  if (!currentAdminToken()) return false;
+  const authenticated = await verifyAdminSession(request);
+  if (!authenticated) updateAdminToken(null);
+  return authenticated;
 }
 
 export async function listOnlineTemplates(admin = false) {
   if (!onlineTemplatesConfigured) return [];
-  const rows = await request(admin ? "/api/admin/templates" : "/api/templates", { token: admin ? adminToken : null });
+  const rows = await request(admin ? "/api/admin/templates" : "/api/templates", { token: admin ? currentAdminToken() : null });
   return loadRows(rows, admin);
 }
 
 export async function getOnlineTemplate(id) {
   const detail = await request(`/api/templates/${encodeURIComponent(id)}`);
-  return transformProject(detail.project, null, { admin: Boolean(adminToken) });
+  return transformProject(detail.project, null, { admin: Boolean(currentAdminToken()) });
 }
 
 export async function saveOnlineTemplate(template, existingId = null, onProgress = null) {
-  if (!adminToken) throw new Error("Sign in as an administrator to manage shared templates.");
+  if (!currentAdminToken()) throw new Error("Sign in as an administrator to manage shared templates.");
   const uploaded = [];
   const mapper = async (source) => {
     const result = await uploadSource(source, onProgress);

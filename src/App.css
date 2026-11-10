@@ -1413,6 +1413,25 @@ footer {
   display: none;
 }
 
+.svg-import-notice {
+  position: fixed;
+  z-index: 1200;
+  inset: auto 16px 16px auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid #d7c59c;
+  border-radius: 10px;
+  background: #fffdf7;
+  color: #17352c;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.svg-import-notice button { flex: 0 0 auto; border: 0; background: transparent; color: inherit; font-size: 18px; }
+
 .editor-stage {
   position: relative;
   z-index: 1;
@@ -3570,8 +3589,9 @@ body {
 
 /* Final mobile layout overrides: properties float above the full canvas. */
 @media (max-width: 600px) {
+  .editor-page { --mobile-properties-width: clamp(80px, 24vw, 108px); }
   .editor-workspace {
-    grid-template-columns: minmax(0, 1fr) clamp(112px, 33vw, 150px);
+    grid-template-columns: minmax(0, 1fr) var(--mobile-properties-width);
     grid-template-rows: minmax(0, 1fr);
     padding-bottom: 0;
   }
@@ -3585,6 +3605,7 @@ body {
 
   .canvas-wrap {
     position: relative;
+    min-width: 0;
     overflow: hidden;
     isolation: isolate;
   }
@@ -3634,6 +3655,7 @@ body {
     display: block;
     width: auto;
     min-width: 0;
+    overflow-wrap: anywhere;
     max-height: 100%;
     overflow-x: hidden;
     overflow-y: auto;
@@ -3655,7 +3677,12 @@ body {
   .properties-panel > .text-section { margin-block: 5px; padding: 0 5px; }
   .properties-panel > .text-section > summary { min-height: 38px; padding: 8px 2px; font-size: 10px; }
   .properties-panel .field-label { gap: 3px; font-size: 9px; }
-  .properties-panel .font-select, .properties-panel .number-input { max-width: 100%; min-width: 0; font-size: 10px; }
+  .properties-panel .font-select, .properties-panel .number-input, .properties-panel .text-input { width: 100%; max-width: 100%; min-width: 0; font-size: 10px; }
+  .properties-panel > h2, .properties-panel .field-label, .properties-panel .panel-hint { overflow-wrap: anywhere; }
+  .properties-panel .font-size-controls { grid-template-columns: minmax(0, 1fr) 44px; gap: 3px; }
+  .properties-panel .format-row, .properties-panel .alignment-control { flex-wrap: wrap; }
+  .properties-panel .image-filter-presets { grid-template-columns: minmax(0, 1fr); }
+  .properties-panel .image-filter-presets button { min-height: 32px; font-size: 8px; overflow-wrap: anywhere; }
   .properties-panel .replace-image-btn, .properties-panel .font-import-button { width: 100%; min-height: 38px; padding: 5px; font-size: 9px; }
 
   .mobile-properties-close {
@@ -3691,7 +3718,7 @@ body {
     right: 4px;
     bottom: calc(62px + env(safe-area-inset-bottom));
     left: auto;
-    width: clamp(112px, 33vw, 150px);
+    width: var(--mobile-properties-width);
     max-height: min(58dvh, calc(100dvh - 100px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
     overflow-y: auto;
     padding: 8px;
@@ -3701,7 +3728,8 @@ body {
     box-shadow: 0 8px 24px rgb(24 43 31 / 16%);
   }
   .editor-menu-panel button,
-  .editor-menu-panel select { min-height: 40px; padding: 7px; font-size: 10px; }
+  .editor-menu-panel button,
+  .editor-menu-panel select { width: 100%; min-width: 0; min-height: 40px; padding: 7px 5px; font-size: 9px; line-height: 1.2; white-space: normal; overflow-wrap: anywhere; }
   .canvas-caption { flex: 0 0 auto; margin-top: 3px; font-size: 9px; }
 }
 
@@ -3770,4 +3798,32 @@ body {
   .size-picker-physical, .size-picker-print, .size-picker-help, .size-picker-error { grid-column: 1 / -1; }
   .size-picker > label { min-width: 0; font-size: 10px; }
   .size-picker select, .size-picker input { width: 100%; min-width: 0; }
+}
+
+.home-logo-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.home-logo-trigger:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.admin-login-reveal {
+  margin: 0 0 16px;
+}
+
+.project-file-state,
+.project-file-message {
+  margin: 6px 0;
+  color: #59645f;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }

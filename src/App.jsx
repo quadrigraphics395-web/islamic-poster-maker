@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import "./App.css";
 import BackgroundRemover from "./components/BackgroundRemover.jsx";
 import ExportSettings from "./components/ExportSettings.jsx";
@@ -22,6 +22,14 @@ import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackg
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
+import { fitCanvasToViewport, mobilePropertiesWidth } from "./utils/canvasViewport.js";
+import { importSvgDocument } from "./utils/svgImport.js";
+import { isEditableKeyboardTarget } from "./utils/editorKeyboard.js";
+
+import { chooseProjectOpenFile, chooseProjectSaveHandle, confirmProjectReplacement, downloadProjectFile, parseProjectFile, readProjectFile, serializeProjectFile, suggestedProjectFileName, writeProjectFileHandle } from "./utils/projectFileManager.js";
+import { readProjectRecovery, writeProjectRecovery } from "./utils/projectRecovery.js";
+import { restoreProjectFileHandle, storeProjectFileHandle } from "./utils/projectFileHandleStore.js";
+import { advanceLogoClickSequence, adminSessionRemainingMs, publishedGalleryTemplates, readAdminSessionToken, shouldShowSaveAsTemplate } from "./utils/adminExperience.js";
 
 const canvasSizes = {
   "Instagram Post 1080x1080": { width: 1080, height: 1080 },
@@ -208,19 +216,6 @@ const islamicShapes = [
   { id: "circle-ornament", label: "Circle Ornament", svg: '<circle cx="50" cy="50" r="31" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="50" cy="50" r="21" fill="none" stroke="currentColor" stroke-width="2"/><path d="M50 4 57 19 50 25 43 19Zm0 92 7-15-7-6-7 6ZM4 50l15-7 6 7-6 7Zm92 0-15-7-6 7 6 7ZM17 17l16 7-1 9-9 1Zm66 66-16-7 1-9 9-1Zm0-66-16 7 1 9 9 1Zm-66 66 16-7-1-9-9-1Z"/>' },
   { id: "rounded-frame", label: "Rounded Islamic Frame", svg: '<path d="M20 92V47Q20 20 50 20t30 27v45H68V47q0-15-18-15T32 47v45Zm-8-10h12m52 0h12M12 92h76" fill="none" stroke="currentColor" stroke-width="3"/><path d="m50 7 6 8-6 8-6-8Z"/>' },
   { id: "floral", label: "Floral Islamic Ornament", svg: '<path d="M50 50C28 42 29 20 50 8c21 12 22 34 0 42Zm0 0c8-22 30-21 42 0-12 21-34 22-42 0Zm0 0c22 8 21 30 0 42-21-12-22-34 0-42Zm0 0c-8 22-30 21-42 0 12-21 34-22 42 0Z"/><circle cx="50" cy="50" r="9"/><path d="M50 8V3m42 47h5M50 92v5M8 50H3" fill="none" stroke="currentColor" stroke-width="3"/>' },
-];
-
-const posterTemplates = [
-  { id: "bismillah", name: "Bismillah", category: "Faith", text: "بسم اللہ الرحمن الرحیم", subtitle: "Begin with the name of Allah", background: "#17352c", accent: "#d5ad62", textColor: "#fffdf4", fontSize: 46 },
-  { id: "jumma", name: "Jumma Mubarak", category: "Weekly", text: "جمعہ مبارک", subtitle: "A blessed Friday", background: "#17352c", accent: "#d5ad62", textColor: "#ffffff", fontSize: 58 },
-  { id: "tawakkul", name: "Trust in Allah", category: "Faith", text: "اللہ پر بھروسہ رکھیں", subtitle: "Place your trust in Allah", background: "#17352c", accent: "#d5ad62", textColor: "#ffffff", fontSize: 42 },
-  { id: "ramadan", name: "Ramadan Kareem", category: "Occasions", text: "رمضان كريم", subtitle: "A month of mercy and reflection", background: "#143d38", accent: "#e0c37d", textColor: "#fff7e6", fontSize: 58 },
-  { id: "eid", name: "Eid Mubarak", category: "Occasions", text: "عيد مبارك", subtitle: "Peace, joy and togetherness", background: "#713d3a", accent: "#f0cf91", textColor: "#fff7e9", fontSize: 58 },
-  { id: "dhikr", name: "Daily Dhikr", category: "Faith", text: "سُبْحَانَ الله", subtitle: "SubhanAllah", background: "#1e3852", accent: "#d7b975", textColor: "#fffaf0", fontSize: 56 },
-  { id: "dua", name: "A Daily Dua", category: "Dua", text: "رَبِّ زِدْنِي عِلْمًا", subtitle: "My Lord, increase me in knowledge", background: "#d8e8dc", accent: "#638b70", textColor: "#244435", fontSize: 42 },
-  { id: "salawat", name: "Send Blessings", category: "Faith", text: "اللهم صل على محمد", subtitle: "Peace and blessings upon the Prophet", background: "#343048", accent: "#dfbd83", textColor: "#fff9ed", fontSize: 42 },
-  { id: "alhamdulillah", name: "Alhamdulillah", category: "Faith", text: "الحمد لله", subtitle: "All praise belongs to Allah", background: "#e7d7b6", accent: "#617455", textColor: "#354733", fontSize: 64 },
-  { id: "peace", name: "A Moment of Peace", category: "Greetings", text: "السلام عليكم", subtitle: "May peace be with you", background: "#31504b", accent: "#dfb886", textColor: "#fff8ed", fontSize: 52 },
 ];
 
 const resizeCorners = [
@@ -635,6 +630,7 @@ function App() {
   ));
   const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
   const [documentSizeOpen, setDocumentSizeOpen] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? 360 : window.innerWidth);
   const [backgroundImage, setBackgroundImage] = useState(null);
   const [backgroundGradientColors, setBackgroundGradientColors] = useState(["#10261f", "#31704b", "#ddbf72"]);
   const [backgroundGradientThirdEnabled, setBackgroundGradientThirdEnabled] = useState(false);
@@ -662,10 +658,13 @@ const personalFontInputRef = useRef(null);
   const [selectionMarquee, setSelectionMarquee] = useState(null);
   const [canvasViewOffset, setCanvasViewOffset] = useState({ x: 0, y: 0 });
   const [canvasZoom, setCanvasZoom] = useState(1);
+  const [canvasViewportSize, setCanvasViewportSize] = useState({ width: 0, height: 0 });
   const [groupEditMode, setGroupEditMode] = useState(false);
   const [groupEditGroupId, setGroupEditGroupId] = useState(null);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(null);
   const [vectorMessage, setVectorMessage] = useState("");
+  const [svgImportBusy, setSvgImportBusy] = useState(false);
+  const [svgImportNotice, setSvgImportNotice] = useState("");
   const [keepTrimCutter, setKeepTrimCutter] = useState(false);
   const [trimTopIsCutter, setTrimTopIsCutter] = useState(true);
   const [expandedGroupIds, setExpandedGroupIds] = useState([]);
@@ -757,6 +756,16 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [activeProjectName, setActiveProjectName] = useState("");
   const [projectStorageError, setProjectStorageError] = useState("");
+  const [projectFileHandle, setProjectFileHandle] = useState(null);
+  const [projectFileBaseline, setProjectFileBaseline] = useState(undefined);
+  const [projectFileMessage, setProjectFileMessage] = useState("");
+  const [projectRecoveryStatus, setProjectRecoveryStatus] = useState("Checking local recovery…");
+  const [projectRecoveryReady, setProjectRecoveryReady] = useState(false);
+  const [adminLoginEntryVisible, setAdminLoginEntryVisible] = useState(false);
+  const logoClickSequenceRef = useRef({ count: 0, startedAt: 0 });
+  const recoveryPromptHandledRef = useRef(false);
+  const baselinePendingRef = useRef(true);
+  const skipRecoveryWriteRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -782,10 +791,12 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     return () => { active = false; };
   }, []);
   const uploadRef = useRef(null);
+  const svgUploadRef = useRef(null);
   const backgroundUploadRef = useRef(null);
   const textFillUploadRef = useRef(null);
-  const projectUploadRef = useRef(null);
+  const projectFileInputRef = useRef(null);
   const canvasRef = useRef(null);
+  const canvasWrapRef = useRef(null);
   const projectExtrasRef = useRef({});
   const dragRef = useRef(null);
   const canvasPointersRef = useRef(new Map());
@@ -806,9 +817,15 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     const fitAfterOrientationChange = () => {
       setCanvasZoom(1);
       setCanvasViewOffset({ x: 0, y: 0 });
+      setViewportWidth(window.innerWidth);
     };
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
     orientation.addEventListener("change", fitAfterOrientationChange);
-    return () => orientation.removeEventListener("change", fitAfterOrientationChange);
+    window.addEventListener("resize", updateViewportWidth);
+    return () => {
+      orientation.removeEventListener("change", fitAfterOrientationChange);
+      window.removeEventListener("resize", updateViewportWidth);
+    };
   }, []);
   function changePathDraft(nextOrUpdate) {
     const next = typeof nextOrUpdate === "function" ? nextOrUpdate(pathDraftRef.current) : nextOrUpdate;
@@ -839,6 +856,41 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const presetPhysicalSize = canvasSize === "Custom" ? null : getPresetPhysicalSize(canvasSizes[canvasSize]);
   const physicalSize = presetPhysicalSize ?? { widthIn: dimensions.width / CSS_PIXELS_PER_INCH, heightIn: dimensions.height / CSS_PIXELS_PER_INCH };
   const previewExportDimensions = getPrintExportDimensions(dimensions.width, dimensions.height, printDpi);
+  const projectSnapshot = useMemo(() => JSON.stringify(captureProject()), [
+    canvasSize, customWidth, customHeight, sizeUnit, printDpi, background, backgroundMode, backgroundImage,
+    backgroundGradientColors, backgroundGradientThirdEnabled, backgroundGradientAngle, selectedIslamicBackgroundId,
+    backgroundOverlayEnabled, backgroundOverlayOpacity, objects, pages, currentPageId, templateName, snapGridEnabled,
+  ]);
+  const hasUnsavedProjectChanges = projectFileBaseline !== undefined && projectSnapshot !== projectFileBaseline;
+  const publicGalleryTemplates = publishedGalleryTemplates(savedTemplates);
+  const fittedCanvas = fitCanvasToViewport(
+    dimensions.width,
+    dimensions.height,
+    canvasViewportSize.width || dimensions.width,
+    canvasViewportSize.height || dimensions.height,
+  );
+  useEffect(() => {
+    if (!editor) return undefined;
+    const element = canvasWrapRef.current;
+    if (!element) return undefined;
+    const measure = () => {
+      const bounds = element.getBoundingClientRect();
+      setCanvasViewportSize((current) => (
+        Math.abs(current.width - bounds.width) < 0.5 && Math.abs(current.height - bounds.height) < 0.5
+          ? current
+          : { width: bounds.width, height: bounds.height }
+      ));
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    const firstMeasure = window.requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.cancelAnimationFrame(firstMeasure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [editor, dimensions.width, dimensions.height]);
   useEffect(() => {
     setCanvasZoom(1);
     setCanvasViewOffset({ x: 0, y: 0 });
@@ -1247,16 +1299,20 @@ function deletePage(pageId) {
     setRedoStack([]);
     setActiveProjectId(null);
     setActiveProjectName("");
+    setProjectFileHandle(null);
+    setProjectFileMessage("");
+    baselinePendingRef.current = true;
   }
 
   function startBlankPoster() {
+    if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
     resetProjectState();
     setDocumentSizeOpen(window.matchMedia(COMPACT_EDITOR_QUERY).matches);
     setEditor(true);
   }
 
   function createNewProject() {
-    if (!window.confirm("Start a new poster? Unsaved changes in this canvas will be cleared.")) return;
+    if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
     resetProjectState();
     if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) setDocumentSizeOpen(true);
   }
@@ -1584,9 +1640,10 @@ function deletePage(pageId) {
   function ungroupSelected() {
     if (selectedObject?.type !== "group") return;
     saveHistory();
-    const ungrouped = selectedObject.children.map((child) => {
+    const ungrouped = selectedObject.children.map((child, childIndex) => {
       const transformed = transformGroupChild(child, selectedObject);
       delete transformed.groupId;
+      if (childIndex === 0 && selectedObject.svgSource) transformed.svgSource = selectedObject.svgSource;
       return transformed;
     });
     const index = objects.findIndex((object) => object.id === selectedObject.id);
@@ -2303,6 +2360,7 @@ function deletePage(pageId) {
 
   useEffect(() => {
     function onKeyDown(event) {
+      if (isEditableKeyboardTarget(event.target)) return;
       if (event.key === "Escape" && pathDraft) {
         event.preventDefault();
         changePathDraft(null);
@@ -2320,7 +2378,6 @@ function deletePage(pageId) {
         changePathDraft((current) => current?.slice(0, -1) ?? null);
         return;
       }
-      if (event.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
       if (event.key === "Delete" && selectedIds.length) {
         event.preventDefault();
         deleteSelectedObjects();
@@ -2393,6 +2450,30 @@ function deletePage(pageId) {
     };
     reader.readAsDataURL(file);
     event.target.value = "";
+  }
+
+  async function uploadSvg(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".svg") && file.type !== "image/svg+xml") {
+      setSvgImportNotice("Choose an SVG file.");
+      return;
+    }
+    setSvgImportBusy(true);
+    setSvgImportNotice("");
+    try {
+      const source = await file.text();
+      const imported = importSvgDocument(source, { width: dimensions.width, height: dimensions.height, createId: () => nextObjectId("svg") });
+      saveHistory();
+      setObjects((current) => [...current, ...imported.objects]);
+      selectObject(imported.objects[0].id);
+      setSvgImportNotice(imported.warnings.length ? imported.warnings.join(" ") : `Imported ${imported.objects.length} editable SVG object${imported.objects.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setSvgImportNotice(error.message || "The SVG could not be imported.");
+    } finally {
+      setSvgImportBusy(false);
+    }
   }
 
   function applyImageEdit(src) {
@@ -2763,8 +2844,8 @@ function deletePage(pageId) {
     })));
   }
 
-  async function openSaveTemplateDialog(target = "local") {
-    if (target === "online" && !canEditTemplates) return;
+  async function openSaveTemplateDialog(target = "online") {
+    if (!canEditTemplates || target !== "online") return;
     setTemplateStorageError("");
     try {
       await verifyTemplateAssets(captureProject());
@@ -2777,14 +2858,9 @@ function deletePage(pageId) {
   }
 
   async function persistTemplate(name, category) {
+    if (!canEditTemplates || templateSaveTarget !== "online") throw new Error("Only a verified administrator can create shared templates.");
     const project = captureProject();
     await verifyTemplateAssets(project);
-    if (templateSaveTarget === "local") {
-      const template = createTemplateRecord(name, category, project, templatePreview);
-      await writeTemplate(template);
-      await refreshTemplateList();
-      return;
-    }
     if (!canEditTemplates) throw new Error("Sign in as an administrator to manage shared templates.");
     try {
       await saveOnlineTemplate({ name, category, project, preview: templatePreview, published: false }, null, setTemplateUploadProgress);
@@ -2884,6 +2960,11 @@ function deletePage(pageId) {
       const workingCopy = JSON.parse(JSON.stringify(project));
       workingCopy.templateName = template.name;
       applyProject(workingCopy, null, "");
+    setProjectFileHandle(null);
+    setProjectFileMessage("");
+    setProjectFileMessage("");
+    setProjectFileBaseline(undefined);
+    baselinePendingRef.current = true;
       return;
     }
     const storedTemplates = await readTemplates();
@@ -2893,9 +2974,15 @@ function deletePage(pageId) {
     const workingCopy = JSON.parse(JSON.stringify(storedTemplate.project));
     workingCopy.templateName = storedTemplate.name;
     applyProject(workingCopy, null, "");
+    setProjectFileHandle(null);
+    setProjectFileMessage("");
+    setProjectFileMessage("");
+    setProjectFileBaseline(undefined);
+    baselinePendingRef.current = true;
   }
 
   async function selectTemplate(template) {
+    if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
     if (template.source === "saved" || template.source === "online") {
       setOpeningTemplateId(template.id);
       try {
@@ -2912,7 +2999,7 @@ function deletePage(pageId) {
     event.preventDefault(); setAdminLoginError(""); setAdminLoginBusy(true);
     try {
       await adminSignIn(adminEmail, adminPassword);
-      setIsTemplateAdmin(true); setAdminLoginOpen(false); setAdminPassword("");
+      setIsTemplateAdmin(true); setAdminLoginOpen(false); setAdminLoginEntryVisible(false); setAdminPassword("");
       const online = await listOnlineTemplates(true);
       setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online]);
     } catch (error) { setAdminLoginError(error.message || "Admin login failed."); }
@@ -2969,6 +3056,128 @@ function deletePage(pageId) {
     openProjectsDialog();
   }
 
+  async function saveProjectAs() {
+    const snapshot = projectSnapshot;
+    const contents = serializeProjectFile(JSON.parse(snapshot));
+    try {
+      const handle = await chooseProjectSaveHandle(window, suggestedProjectFileName(activeProjectName || templateName));
+      if (handle) {
+        const existing = await handle.getFile();
+        if (existing.size > 0 && !window.confirm(`Replace the existing file "${existing.name}"?`)) return;
+        await writeProjectFileHandle(handle, contents);
+        setProjectFileHandle(handle);
+        setProjectFileBaseline(snapshot);
+        const recovery = writeProjectRecovery(JSON.parse(snapshot), { fileHandleKey: "current" });
+        setProjectRecoveryStatus(recovery.saved ? "Recovery saved locally" : recovery.error);
+        try { await storeProjectFileHandle(handle); }
+        catch { setProjectFileMessage("Saved to the selected file. This browser could not remember its file connection for later."); return; }
+        setProjectFileMessage("Saved to the selected project file.");
+        return;
+      }
+      const name = downloadProjectFile(contents, suggestedProjectFileName(activeProjectName || templateName), window);
+      setProjectFileHandle(null);
+      setProjectFileBaseline(snapshot);
+      const recovery = writeProjectRecovery(JSON.parse(snapshot), { fileHandleKey: null });
+      setProjectRecoveryStatus(recovery.saved ? "Recovery saved locally" : recovery.error);
+      setProjectFileMessage(`Downloaded ${name}. This browser cannot reconnect to the downloaded file; use Save As for future saves.`);
+    } catch (error) {
+      if (error?.name !== "AbortError") setProjectFileMessage(error.message || "The project file could not be saved.");
+    }
+  }
+
+  async function saveProjectFile() {
+    if (!projectFileHandle) { await saveProjectAs(); return; }
+    const snapshot = projectSnapshot;
+    try {
+      await writeProjectFileHandle(projectFileHandle, serializeProjectFile(JSON.parse(snapshot)));
+      setProjectFileBaseline(snapshot);
+      const recovery = writeProjectRecovery(JSON.parse(snapshot), { fileHandleKey: "current" });
+      setProjectRecoveryStatus(recovery.saved ? "Recovery saved locally" : recovery.error);
+      setProjectFileMessage("Saved to the selected project file.");
+    } catch (error) { setProjectFileMessage(error.message || "The project file could not be saved. Use Save As to choose it again."); }
+  }
+  async function openProjectSelection(file, handle = null) {
+    try {
+      const project = await readProjectFile(file);
+      if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
+      applyProject(project);
+      setProjectFileHandle(handle);
+      baselinePendingRef.current = true;
+      setProjectFileBaseline(undefined);
+      const recovery = writeProjectRecovery(project, { fileHandleKey: handle ? "current" : null });
+      setProjectRecoveryStatus(recovery.saved ? "Recovery saved locally" : recovery.error);
+      setProjectFileMessage(handle ? `Opened ${file.name}.` : `Opened ${file.name}; use Save As to save changes to a file.`);
+      try { await storeProjectFileHandle(handle); } catch { /* Current session can still use the selected handle. */ }
+    } catch (error) { setProjectFileMessage(error.message || "This project file could not be opened."); }
+  }
+
+  async function openProjectFile() {
+    try {
+      const selected = await chooseProjectOpenFile(window);
+      if (selected) { await openProjectSelection(selected.file, selected.handle); return; }
+      projectFileInputRef.current?.click();
+    } catch (error) {
+      if (error?.name !== "AbortError") setProjectFileMessage(error.message || "A project file could not be opened.");
+    }
+  }
+
+  function handleProjectFileInput(event) {
+    const file = event.target.files?.[0];
+    if (file) void openProjectSelection(file);
+    event.target.value = "";
+  }
+
+  function handleLogoClick() {
+    const next = advanceLogoClickSequence(logoClickSequenceRef.current, Date.now());
+    logoClickSequenceRef.current = next;
+    if (next.revealed) setAdminLoginEntryVisible(true);
+  }
+
+  async function handleAdminSessionExpired() {
+    void adminSignOut();
+    setIsTemplateAdmin(false);
+    setAdminLoginEntryVisible(false);
+    setAdminLoginOpen(false);
+    setTemplateManagerOpen(false);
+    setTemplateSaveOpen(false);
+    try {
+      const online = await listOnlineTemplates(false);
+      setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online]);
+    } catch { /* The backend remains the authority if the public refresh is offline. */ }
+  }
+  async function handleAdminSignOut() {
+    void adminSignOut();
+    setIsTemplateAdmin(false);
+    setAdminLoginEntryVisible(false);
+    setAdminLoginOpen(false);
+    setTemplateManagerOpen(false);
+    setTemplateSaveOpen(false);
+    try {
+      const online = await listOnlineTemplates(false);
+      setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online]);
+    } catch (error) { setTemplateStorageError(error.message || "Public templates could not be refreshed."); }
+  }
+  useEffect(() => {
+    if (!isTemplateAdmin) return undefined;
+    let checking = false;
+    const validateSession = async () => {
+      if (checking) return;
+      checking = true;
+      if (adminSessionRemainingMs(readAdminSessionToken()) <= 0) {
+        await handleAdminSessionExpired();
+        checking = false;
+        return;
+      }
+      const valid = await checkAdminSession();
+      if (!valid) await handleAdminSessionExpired();
+      checking = false;
+    };
+    const timer = window.setInterval(validateSession, 60000);
+    window.addEventListener("focus", validateSession);
+    document.addEventListener("visibilitychange", validateSession);
+    void validateSession();
+    return () => { window.clearInterval(timer); window.clearTimeout(expiryTimer); window.removeEventListener("focus", validateSession); document.removeEventListener("visibilitychange", validateSession); };
+  }, [isTemplateAdmin]);
   function toggleEditorMenu(event) {
     const activeMenu = event.currentTarget.parentElement;
     window.setTimeout(() => {
@@ -3074,6 +3283,67 @@ function deletePage(pageId) {
     setProjectDialogOpen(false);
   }
 
+  useEffect(() => {
+    let active = true;
+    if (recoveryPromptHandledRef.current) return undefined;
+    recoveryPromptHandledRef.current = true;
+    const checkRecovery = async () => {
+      let record = null;
+      try { record = readProjectRecovery(); }
+      catch (error) {
+        setProjectRecoveryStatus(error.message || "Local recovery could not be read.");
+        skipRecoveryWriteRef.current = true;
+      }
+      if (record) {
+        let recoveryProject;
+        try { recoveryProject = parseProjectFile(JSON.stringify(record.project)); }
+        catch (error) {
+          setProjectRecoveryStatus(error.message || "The local recovery copy is invalid.");
+          skipRecoveryWriteRef.current = true;
+          setProjectRecoveryReady(true);
+          return;
+        }
+        const recover = window.confirm("A locally recovered poster is available. Restore it now?");
+        if (recover) {
+          applyProject(recoveryProject, null, "Recovered poster");
+          baselinePendingRef.current = false;
+          setProjectFileBaseline("");
+          setProjectFileHandle(null);
+          if (record.fileHandleKey === "current") {
+            try { setProjectFileHandle(await restoreProjectFileHandle()); }
+            catch { setProjectFileMessage("The saved file connection could not be restored. Use Save As to choose the file again."); }
+          }
+          setProjectRecoveryStatus("Recovered locally; save to a project file when ready.");
+        } else {
+          skipRecoveryWriteRef.current = true;
+          setProjectRecoveryStatus("Previous recovery copy retained until this poster changes.");
+        }
+      } else if (!recoveryReadFailed) {
+        setProjectRecoveryStatus("Recovery will save on this device.");
+      }
+      if (active) setProjectRecoveryReady(true);
+    };
+    void checkRecovery();
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!projectRecoveryReady || !baselinePendingRef.current) return;
+    baselinePendingRef.current = false;
+    setProjectFileBaseline(projectSnapshot);
+  }, [projectSnapshot, projectRecoveryReady]);
+  useEffect(() => {
+    if (!projectRecoveryReady || !editor) return undefined;
+    const timer = window.setTimeout(() => {
+      if (skipRecoveryWriteRef.current) {
+        skipRecoveryWriteRef.current = false;
+        return;
+      }
+      const result = writeProjectRecovery(JSON.parse(projectSnapshot), { fileHandleKey: projectFileHandle ? "current" : null });
+      setProjectRecoveryStatus(result.saved ? "Recovery saved locally" : result.error);
+    }, 850);
+    return () => window.clearTimeout(timer);
+  }, [projectSnapshot, projectFileHandle, editor, projectRecoveryReady]);
+
   function downloadProjectBackup() {
     const blob = new Blob([JSON.stringify(captureProject(), null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -3087,31 +3357,6 @@ function deletePage(pageId) {
     URL.revokeObjectURL(url);
   }
 
- function loadProject(event) {
-
-  const file =
-    event.target.files?.[0];
-
-  if (!file) return;
-
-  const reader =
-    new FileReader();
-
-  reader.onload = () => {
-    try {
-      const project = JSON.parse(reader.result);
-      applyProject(project);
-    } catch (loadError) {
-      window.alert(loadError.message || "This project file could not be opened.");
-    }
-  };
-
-  reader.onerror = () => window.alert("The selected project file could not be read.");
-
-  reader.readAsText(file);
-
-  event.target.value = "";
-}
 
   function openExport(format) {
     setExportInitialFormat(format);
@@ -3227,17 +3472,33 @@ function deletePage(pageId) {
           if (object.shape === "custom") {
             const width = ((object.width ?? 38) / 100) * output.width;
             const height = ((object.height ?? 38) / 100) * output.height;
-            context.translate(-width / 2, -height / 2);
-            context.scale(width / 100, height / 100);
-            const path = new Path2D(pathToSvg(object.paths ?? []));
+            let path;
+            if (object.svgPathData) {
+              const [viewX, viewY, viewWidth, viewHeight] = object.svgViewBox;
+              context.translate(-width / 2, -height / 2);
+              context.scale(width / viewWidth, height / viewHeight);
+              context.translate(-viewX, -viewY);
+              context.transform(...object.svgTransform);
+              path = new Path2D(object.svgPathData);
+            } else {
+              context.translate(-width / 2, -height / 2);
+              context.scale(width / 100, height / 100);
+              path = new Path2D(pathToSvg(object.paths ?? []));
+            }
             if (object.fillEnabled !== false) {
               context.fillStyle = object.color ?? "#d5ad62";
+              context.globalAlpha *= object.svgImported ? object.fillOpacity ?? 1 : 1;
               context.fill(path, object.fillRule ?? "evenodd");
+              context.globalAlpha = 1;
             }
             if (object.strokeEnabled) {
               context.strokeStyle = object.strokeColor ?? object.color ?? "#17352c";
-              context.lineWidth = (object.strokeWidth ?? 1) * 100 / Math.max(width, height);
+              context.globalAlpha = object.svgImported ? object.strokeOpacity ?? 1 : 1;
+              context.lineWidth = object.svgImported ? object.strokeWidth ?? 1 : (object.strokeWidth ?? 1) * 100 / Math.max(width, height);
+              context.lineCap = object.strokeLineCap ?? "butt";
+              context.lineJoin = object.strokeLineJoin ?? "miter";
               context.stroke(path);
+              context.globalAlpha = 1;
             }
           } else if (vectorShape) {
             const loaded = loadedImages.find((item) => item?.object.id === object.id);
@@ -3507,8 +3768,8 @@ function deletePage(pageId) {
             <span className="canvas-text-layer canvas-text-fill" dir={object.direction ?? "auto"} style={{ ...getTextPreviewStyle({ ...object, strokeEnabled: false, opacity: 100 }), WebkitTextStroke: "0 transparent", paintOrder: "normal", filter: object.innerShadowEnabled ? `url(#text-inner-${effectId})` : undefined }}>{object.text}</span>
           </span>}
           {vectorShape && <ShapeArtwork shape={object.shape} color={object.color} className="canvas-vector-shape" />}
-          {object.shape === "custom" && <svg className="canvas-vector-shape canvas-custom-vector" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <path d={pathToSvg(object.paths ?? [])} fill={object.fillEnabled === false ? "none" : object.color ?? "#d5ad62"} fillRule={object.fillRule ?? "evenodd"} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeWidth={object.strokeWidth ?? 1} vectorEffect="non-scaling-stroke" />
+          {object.shape === "custom" && <svg className="canvas-vector-shape canvas-custom-vector" viewBox={(object.svgViewBox ?? [0, 0, 100, 100]).join(" ")} preserveAspectRatio="none">
+            <path d={object.svgPathData ?? pathToSvg(object.paths ?? [])} transform={object.svgTransform ? `matrix(${object.svgTransform.join(" ")})` : undefined} fill={object.fillEnabled === false ? "none" : object.color ?? "#d5ad62"} fillOpacity={object.svgImported ? object.fillOpacity : undefined} fillRule={object.fillRule ?? "evenodd"} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={object.svgImported ? object.strokeOpacity : undefined} strokeWidth={object.strokeWidth ?? 1} strokeLinecap={object.strokeLineCap} strokeLinejoin={object.strokeLineJoin} vectorEffect={object.svgImported ? "none" : "non-scaling-stroke"} />
           </svg>}
           {object.type === "shape" && !vectorShape && <span className={`canvas-shape shape-${object.shape ?? "line"}`} style={{ width: `${object.width ?? 140}px`, height: `${object.height ?? 16}px`, backgroundColor: object.shape === "circle-outline" ? "transparent" : object.color, borderColor: object.color }} />}
           {object.type === "image" && (imageCrop ? <div className="canvas-image-viewport" style={{ aspectRatio: imageAspectRatio }}>
@@ -3543,7 +3804,7 @@ function deletePage(pageId) {
 
   if (editor) {
     return (
-      <div className="editor-page">
+      <div className="editor-page" style={{ "--mobile-properties-width": `${mobilePropertiesWidth(viewportWidth)}px` }}>
         <header className="editor-topbar">
           <button className="back-btn" onClick={() => setEditor(false)}>← Back</button>
           <div className="editor-brand"><span className="logo"><img src="/logo.png" alt="" /></span><div><strong>Qadri Poster Maker</strong><small>{activeProjectName || templateName}</small></div></div>
@@ -3553,6 +3814,7 @@ function deletePage(pageId) {
               <div className="editor-menu-panel">
                 <button type="button" onClick={addText}>Add Text</button>
                 <button type="button" onClick={() => uploadRef.current?.click()}>{selectedObject?.type === "image" ? "Replace Image" : "Upload Image"}</button>
+                <button type="button" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}>{svgImportBusy ? "Importing SVG…" : "Import Editable SVG"}</button>
                 <button type="button" onClick={() => setShapePickerOpen(true)}>Add Shape</button>
                 <button type="button" onClick={() => { setActiveTool("pen"); changePathDraft(null); }}>Custom Shape (Pen)</button>
                 <button type="button" onClick={() => backgroundUploadRef.current?.click()}>Background Image</button>
@@ -3581,7 +3843,7 @@ function deletePage(pageId) {
                   <button type="button" className={activeTool === "multi" ? "is-current" : ""} onClick={() => { setActiveTool("multi"); changePathDraft(null); }}>Multi-select</button>
                   <button type="button" className={activeTool === "freehand" ? "is-current" : ""} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}>Freehand</button>
                   <button type="button" className={activeTool === "pen" ? "is-current" : ""} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}>Pen / Bezier</button>
-                  <button type="button" disabled={selectedObject?.shape !== "custom"} className={activeTool === "node" ? "is-current" : ""} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}>Node edit</button>
+                  <button type="button" disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} className={activeTool === "node" ? "is-current" : ""} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}>Node edit</button>
                 </div>
                 {(activeTool === "freehand" || activeTool === "pen") && <>
                   <label className="effect-toggle"><input type="checkbox" checked={closedDrawing} onChange={(event) => setClosedDrawing(event.target.checked)} />Close freehand paths</label>
@@ -3677,14 +3939,20 @@ function deletePage(pageId) {
               <summary title="Save projects, pages and templates" onClick={toggleEditorMenu}><span>▣</span>Project</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <button type="button" onClick={createNewProject}>New Project</button>
-                <button type="button" onClick={saveProject}>Save Project</button>
+                <button type="button" onClick={saveProjectFile}>Save</button>
+                <button type="button" onClick={saveProjectAs}>Save As</button>
+                <button type="button" onClick={openProjectFile}>Open Project</button>
+                <button type="button" onClick={saveProject}>Save to Browser Library</button>
                 <button type="button" onClick={openProjectsDialog}>My Projects</button>
-                <button type="button" onClick={() => openSaveTemplateDialog("local")}>Save as Local Template</button>
+                {!canEditTemplates && savedTemplates.some((template) => template.source !== "online") && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Browser Templates</button>}
                 {canEditTemplates && <>
-                  <button type="button" onClick={() => openSaveTemplateDialog("online")}>Save as Shared Template</button>
+                  {shouldShowSaveAsTemplate(canEditTemplates) && <button type="button" onClick={() => openSaveTemplateDialog("online")}>Save as Template</button>}
                   <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Templates</button>
+                  <button type="button" onClick={handleAdminSignOut}>Admin Sign Out</button>
                 </>}
-                <button type="button" onClick={() => projectUploadRef.current?.click()}>Open JSON Project</button>
+                <p className="project-file-state" role="status">File: {hasUnsavedProjectChanges ? "Unsaved changes" : projectFileHandle ? "Saved" : "Not saved to a project file"}</p>
+                {projectFileMessage && <p className="project-file-message" role="status">{projectFileMessage}</p>}
+                <p className="project-file-state" role="status">{projectRecoveryStatus}</p>
                 <button type="button" onClick={addPage}>Add Page</button>
                 <label className="editor-menu-label">Pages</label>
                 {pages.map((page) => (
@@ -3720,8 +3988,10 @@ function deletePage(pageId) {
             <button type="button" className="export-primary" title="Export as PNG, JPG or PDF" onClick={() => openExport("png")}>Export</button>
           </div>
           <input ref={uploadRef} className="file-input" type="file" accept="image/*" onChange={uploadImage} />
+          <input ref={svgUploadRef} className="file-input" type="file" accept=".svg,image/svg+xml" onChange={uploadSvg} />
           <input ref={backgroundUploadRef} className="file-input" type="file" accept="image/*" onChange={uploadBackgroundImage} />
-          <input ref={projectUploadRef} className="file-input" type="file" accept=".json" onChange={loadProject} />
+          <input ref={projectFileInputRef} className="file-input" type="file" accept=".qpm,.json,application/json" onChange={handleProjectFileInput} />
+          {svgImportNotice && <div className="svg-import-notice" role="status">{svgImportNotice}<button type="button" aria-label="Dismiss SVG import message" onClick={() => setSvgImportNotice("")}>×</button></div>}
         </header>
 
         <div className="editor-workspace">
@@ -3746,8 +4016,8 @@ function deletePage(pageId) {
               <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
               <button type="button" onClick={resetCanvasView}>Fit</button>
             </div>
-            <div className="canvas-wrap">
-              <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: dimensions.width > dimensions.height ? "100%" : "auto", height: dimensions.width > dimensions.height ? "auto" : "100%", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
+            <div ref={canvasWrapRef} className="canvas-wrap">
+              <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: `${fittedCanvas.width}px`, height: `${fittedCanvas.height}px`, maxWidth: "none", maxHeight: "none", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
                 <div className="poster-artwork">
                   {activeBackgroundImage && <img className="poster-background-image" src={activeBackgroundImage} alt="" draggable="false" />}
                   {backgroundOverlayEnabled && <div className="poster-background-overlay" style={{ opacity: backgroundOverlayOpacity / 100 }} />}
@@ -4218,14 +4488,14 @@ function deletePage(pageId) {
             initialError={projectStorageError}
             onClose={() => setProjectDialogOpen(false)}
             onSave={persistProject}
-            onOpen={(project) => applyProject(project.project, project.id, project.name)}
+            onOpen={(project) => { if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return; applyProject(project.project, project.id, project.name); setProjectFileHandle(null); setProjectFileMessage(""); setProjectFileBaseline(undefined); baselinePendingRef.current = true; }}
             onUpdate={updateProject}
             onRename={renameProject}
             onDelete={deleteProject}
             onDownloadBackup={downloadProjectBackup}
           />
         )}
-        {templateSaveOpen && (
+        {templateSaveOpen && canEditTemplates && (
           <TemplateSaveDialog
             preview={templatePreview}
             categories={[...new Set(savedTemplates.map((template) => template.category))]}
@@ -4236,9 +4506,9 @@ function deletePage(pageId) {
             onClose={() => setTemplateSaveOpen(false)}
           />
         )}
-        {templateManagerOpen && canEditTemplates && (
+        {templateManagerOpen && (canEditTemplates || savedTemplates.some((template) => template.source !== "online")) && (
           <TemplateManager
-            templates={savedTemplates}
+            templates={canEditTemplates ? savedTemplates : savedTemplates.filter((template) => template.source !== "online")}
             onClose={() => setTemplateManagerOpen(false)}
             onMetadataChange={updateTemplateMetadata}
             onMove={moveTemplate}
@@ -4270,7 +4540,7 @@ function deletePage(pageId) {
   <div className="app">
 <header className="header">
   <div className="home-brand">
-    <img className="logo" src="/logo.png" alt="Qadri Poster Maker logo" />
+    <button type="button" className="home-logo-trigger" aria-label="Qadri Poster Maker home" onClick={handleLogoClick}><img className="logo" src="/logo.png" alt="Qadri Poster Maker logo" /></button>
     <div><strong>Qadri Poster Maker</strong><span>Design Studio</span></div>
   </div>
 
@@ -4279,10 +4549,7 @@ function deletePage(pageId) {
         <section className="hero">
           <h2>اپنا خوبصورت اسلامی پوسٹر بنائیں</h2>
 
-          <p>
-            Dua، Jumma اور Islamic Quotes کے خوبصورت
-            پوسٹر آسانی سے تیار کریں۔
-          </p>
+          <p>Design and save editable posters with your own text, images and artwork.</p>
 
           <button
             className="create-btn"
@@ -4292,19 +4559,12 @@ function deletePage(pageId) {
           </button>
         </section>
 
-        <section className="local-admin-controls" aria-label="Template administration">
-          <div>
-            <strong>{canEditTemplates ? "Template administrator signed in" : "Template Gallery"}</strong>
-            <p>{canEditTemplates ? "Shared template changes are checked by the Cloudflare API." : "Browse published templates and open an editable copy."}</p>
-          </div>
-          <div>
-            {canEditTemplates
-              ? <button type="button" onClick={() => { void adminSignOut(); setIsTemplateAdmin(false); listOnlineTemplates(false).then((online) => setSavedTemplates((current) => [...current.filter((item) => item.source !== "online"), ...online])); }}>Admin Sign Out</button>
-              : <button type="button" disabled={!onlineTemplatesConfigured} onClick={() => setAdminLoginOpen(true)}>Admin Login</button>}
-            {canEditTemplates && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Templates</button>}
-            {!canEditTemplates && savedTemplates.some((template) => template.source !== "online") && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Local Templates</button>}
-          </div>
-        </section>
+        {canEditTemplates && <section className="local-admin-controls" aria-label="Template administration">
+          <div><strong>Template administrator signed in</strong><p>Shared template changes are checked by the Cloudflare API.</p></div>
+          <div><button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Templates</button><button type="button" onClick={handleAdminSignOut}>Admin Sign Out</button></div>
+        </section>}
+        {!canEditTemplates && adminLoginEntryVisible && <button type="button" className="admin-login-reveal" disabled={!onlineTemplatesConfigured} onClick={() => setAdminLoginOpen(true)}>Admin Login</button>}
+        {!canEditTemplates && savedTemplates.some((template) => template.source !== "online") && <button type="button" onClick={() => setTemplateManagerOpen(true)}>Manage Browser Templates</button>}
         {!onlineTemplatesConfigured && <p className="template-storage-status">Online template gallery is not configured. Set VITE_TEMPLATE_API_URL to enable shared templates.</p>}
         {adminLoginOpen && <div className="template-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdminLoginOpen(false); }}>
           <form className="template-modal template-save-modal" onSubmit={handleAdminLogin}>
@@ -4321,23 +4581,10 @@ function deletePage(pageId) {
         {onlineTemplatesLoading && <p className="template-storage-status" role="status">Loading shared templates…</p>}
         {templateStorageError && <div className="template-storage-error" role="alert"><span>{templateStorageError}</span><button type="button" disabled={!onlineTemplatesConfigured} onClick={() => refreshTemplateList().catch((error) => setTemplateStorageError(error.message || "Templates could not be refreshed."))}>Retry</button></div>}
 
-        <h2 className="section-title">Categories</h2>
-
-        <div className="categories">
-          <div className="category">🤲<span>Dua</span></div>
-          <div className="category">🕌<span>Jumma</span></div>
-          <div className="category">❤️<span>Islamic Quotes</span></div>
-          <div className="category">🌙<span>Ramadan</span></div>
-          <div className="category">✨<span>Durood</span></div>
-        </div>
-
-        <h2 className="section-title">Ready Made Templates</h2>
-
+        <h2 className="section-title">Published Templates</h2>
         <TemplateGallery
-          builtIns={posterTemplates}
-          templates={savedTemplates}
+          templates={publicGalleryTemplates}
           onSelect={selectTemplate}
-          adminMode={canEditTemplates}
           loadingTemplateId={openingTemplateId}
         />
       </main>
