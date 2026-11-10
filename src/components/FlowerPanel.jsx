@@ -1,99 +1,92 @@
-import { useMemo, useState } from "react";
-import flowerFiles from "../data/flowerFiles";
+import { useEffect, useMemo, useState } from "react";
 
 export default function FlowerPanel({ onAddFlower }) {
+  const [flowerFiles, setFlowerFiles] = useState([]);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [failedFlowers, setFailedFlowers] = useState(() => new Set());
+
+  useEffect(() => {
+    let active = true;
+
+    fetch("/flowers.json")
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load flower collection.");
+        return response.json();
+      })
+      .then((files) => {
+        if (!active) return;
+        setFlowerFiles(Array.isArray(files)
+          ? files.filter((file) => typeof file === "string" && file.toLowerCase().endsWith(".png"))
+          : []);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setError("Flower collection could not be loaded. Please refresh the app.");
+        setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filteredFlowers = useMemo(() => {
     const query = search.trim().toLowerCase();
-
-    if (!query) {
-      return flowerFiles;
-    }
-
-    return flowerFiles.filter((file) =>
-      file.toLowerCase().includes(query)
-    );
-  }, [search]);
+    if (!query) return flowerFiles;
+    return flowerFiles.filter((file) => file.toLowerCase().includes(query));
+  }, [flowerFiles, search]);
 
   return (
-    <div
-      style={{
-        padding: "16px",
-        background: "#ffffff",
-        borderRadius: "12px",
-        border: "1px solid #ddd",
-      }}
-    >
-      <h3 style={{ marginTop: 0 }}>🌸 Flowers</h3>
-
-      <input
-        type="text"
-        placeholder="Search flowers..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        style={{
-          width: "100%",
-          padding: "10px",
-          borderRadius: "8px",
-          border: "1px solid #ccc",
-          marginBottom: "15px",
-          boxSizing: "border-box",
-        }}
-      />
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "10px",
-          maxHeight: "500px",
-          overflowY: "auto",
-        }}
-      >
-        {filteredFlowers.map((file) => (
-          <button
-            key={file}
-            type="button"
-            onClick={() => onAddFlower?.(`/flowers/${file}`)}
-            title={`Add ${file}`}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: "8px",
-              background: "#fafafa",
-              padding: "6px",
-              cursor: "pointer",
-            }}
-          >
-            <img
-              src={`/flowers/${file}`}
-              alt={file}
-              style={{
-                width: "100%",
-                height: "80px",
-                objectFit: "contain",
-              }}
-            />
-          </button>
-        ))}
+    <div className="flower-panel">
+      <div className="flower-search-wrap">
+        <input
+          type="search"
+          aria-label="Search flowers"
+          placeholder="Search flowers..."
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <span>{filteredFlowers.length} / {flowerFiles.length}</span>
       </div>
 
-      {filteredFlowers.length === 0 && (
-        <p style={{ color: "#777", textAlign: "center" }}>
-          No flowers found.
-        </p>
-      )}
+      {loading && <p className="flower-panel-message">Loading flowers...</p>}
+      {error && <p className="flower-panel-message flower-panel-error">{error}</p>}
 
-      <p
-        style={{
-          marginBottom: 0,
-          marginTop: "12px",
-          fontSize: "13px",
-          color: "#777",
-        }}
-      >
-        {filteredFlowers.length} flowers
-      </p>
+      {!loading && !error && (
+        <>
+          <div className="flower-grid">
+            {filteredFlowers.map((file) => (
+              <button
+                key={file}
+                type="button"
+                className="flower-option"
+                onClick={() => onAddFlower?.(`/flowers/${encodeURIComponent(file)}`)}
+                title={`Add ${file}`}
+                aria-label={`Add flower ${file}`}
+              >
+                <span className="flower-option-image">
+                  {failedFlowers.has(file)
+                    ? <span className="flower-panel-image-error">Image unavailable</span>
+                    : <img
+                        src={`/flowers/${encodeURIComponent(file)}`}
+                        alt=""
+                        loading="lazy"
+                        onError={() => setFailedFlowers((current) => new Set(current).add(file))}
+                      />}
+                </span>
+                <span className="flower-option-name">{file.replace(/\.png$/i, "")}</span>
+              </button>
+            ))}
+          </div>
+
+          {filteredFlowers.length === 0 && (
+            <p className="flower-panel-message">No flowers found. Try another search.</p>
+          )}
+        </>
+      )}
     </div>
   );
 }

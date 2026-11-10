@@ -1135,6 +1135,10 @@ footer {
   box-shadow: 0 14px 36px rgba(25, 42, 32, 0.16);
 }
 
+.editor-menu:not([open]) > .editor-menu-panel {
+  display: none;
+}
+
 .editor-menu-panel-wide {
   min-width: 250px;
 }
@@ -1161,6 +1165,10 @@ footer {
 .editor-menu-panel button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.editor-menu-panel .mobile-only-action {
+  display: none;
 }
 
 .editor-menu-panel .editor-menu-danger {
@@ -4017,6 +4025,7 @@ body {
   .editor-command-bar,
   .editor-toolbox,
   .editor-menu-desktop-only { display: none !important; }
+  .editor-menu-panel .mobile-only-action { display: flex; }
   .editor-menu#editor-menu-project,
   .editor-menu#editor-menu-edit,
   .editor-menu#editor-menu-more,
@@ -4053,4 +4062,224 @@ body {
   color: #59645f;
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+/* Flower collection */
+.flower-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(12, 23, 18, 0.68);
+}
+
+.flower-picker {
+  width: min(780px, 100%);
+  max-height: min(820px, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e2e5df;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.25);
+}
+
+.flower-picker-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #e8ebe6;
+}
+
+.flower-picker-header > div > span {
+  color: #a48752;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+}
+
+.flower-picker-header h2 {
+  margin: 5px 0;
+  color: #294437;
+  font-size: 20px;
+}
+
+.flower-picker-header p {
+  margin: 0;
+  color: #758078;
+  font-size: 12px;
+}
+
+.flower-picker-header > button {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid #e0e5df;
+  border-radius: 8px;
+  background: #fff;
+  color: #294437;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.flower-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.flower-search-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #edf0eb;
+}
+
+.flower-search-wrap input {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid #dce3dc;
+  border-radius: 8px;
+  outline: none;
+  font: inherit;
+  font-size: 14px;
+}
+
+.flower-search-wrap input:focus {
+  border-color: #b89a62;
+  box-shadow: 0 0 0 2px rgba(184, 154, 98, 0.12);
+}
+
+.flower-search-wrap > span {
+  flex: 0 0 auto;
+  color: #758078;
+  font-size: 11px;
+}
+
+.flower-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 11px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 15px 18px 20px;
+}
+
+.flower-option {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #e3e8e1;
+  border-radius: 9px;
+  background: #fbfcfa;
+  color: #34483b;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.flower-option:hover,
+.flower-option:focus-visible {
+  border-color: #b89a62;
+  background: #f8f5ed;
+  outline: none;
+}
+
+.flower-option-image {
+  width: 100%;
+  height: 105px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.flower-option-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.flower-panel-image-error {
+  padding: 8px;
+  color: #a33b36;
+  font-size: 11px;
+}
+
+.flower-option-name {
+  overflow: hidden;
+  color: #536157;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.flower-panel-message {
+  margin: 20px;
+  color: #68766d;
+  font-size: 13px;
+  text-align: center;
+}
+
+.flower-panel-error {
+  color: #a33b36;
+}
+
+@media (max-width: 600px) {
+  .flower-picker-backdrop {
+    align-items: center;
+    padding: 8px;
+  }
+
+  .flower-picker {
+    max-height: calc(100dvh - 16px);
+    border-radius: 11px;
+  }
+
+  .flower-picker-header {
+    padding: 13px 14px 11px;
+  }
+
+  .flower-picker-header h2 {
+    font-size: 17px;
+  }
+
+  .flower-search-wrap {
+    padding: 10px 12px;
+  }
+
+  .flower-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 11px 12px 16px;
+  }
+
+  .flower-option {
+    padding: 6px;
+  }
+
+  .flower-option-image {
+    height: 86px;
+  }
+}
+
+@media (max-width: 360px) {
+  .flower-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

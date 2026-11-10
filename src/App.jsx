@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import "./App.css";
 import BackgroundRemover from "./components/BackgroundRemover.jsx";
 import ExportSettings from "./components/ExportSettings.jsx";
+import FlowerPanel from "./components/FlowerPanel.jsx";
 import ImageCropEditor from "./components/ImageCropEditor.jsx";
 import ProjectManager from "./components/ProjectManager.jsx";
 import TemplateGallery from "./components/TemplateGallery.jsx";
@@ -630,6 +631,7 @@ function App() {
   ));
   const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
   const [documentSizeOpen, setDocumentSizeOpen] = useState(false);
+  const [flowerPickerOpen, setFlowerPickerOpen] = useState(false);
   const [desktopPropertiesCollapsed, setDesktopPropertiesCollapsed] = useState(false);
   const [openEditorMenuId, setOpenEditorMenuId] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? 360 : window.innerWidth);
@@ -1411,16 +1413,14 @@ function deletePage(pageId) {
   }
 
   function startBlankPoster() {
-    if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
-    resetProjectState();
-    setDocumentSizeOpen(window.matchMedia(COMPACT_EDITOR_QUERY).matches);
-    setEditor(true);
+    createNewProject();
   }
 
   function createNewProject() {
     if (!confirmProjectReplacement(hasUnsavedProjectChanges)) return;
     resetProjectState();
-    if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) setDocumentSizeOpen(true);
+    setDocumentSizeOpen(true);
+    setEditor(true);
   }
 
   function openTemplate(template) {
@@ -1636,6 +1636,25 @@ function deletePage(pageId) {
     selectObject(id);
   }
 
+  function addFlower(src) {
+    if (!src) return;
+
+    saveHistory();
+    const id = nextObjectId("image");
+
+    setObjects((current) => [...current, {
+      id,
+      type: "image",
+      locked: false,
+      src,
+      x: 50,
+      y: 50,
+      width: 36,
+    }]);
+
+    selectObject(id);
+    setFlowerPickerOpen(false);
+  }
   function createCustomPath(points, closed) {
     const simplified = simplifyPolyline(points, 0.3);
     if (simplified.length < (closed ? 3 : 2)) {
@@ -3419,8 +3438,10 @@ function deletePage(pageId) {
     recoveryPromptHandledRef.current = true;
     const checkRecovery = async () => {
       let record = null;
+      let recoveryReadFailed = false;
       try { record = readProjectRecovery(); }
       catch (error) {
+        recoveryReadFailed = true;
         setProjectRecoveryStatus(error.message || "Local recovery could not be read.");
         skipRecoveryWriteRef.current = true;
       }
@@ -4113,6 +4134,7 @@ function deletePage(pageId) {
               <summary title="Canvas view and editor options" onClick={toggleEditorMenu}><span>◉</span>View</summary>
               <div className="editor-menu-panel">
                 <button type="button" onClick={() => openMobileProperty("background")}>Page Setup</button>
+                <button type="button" className="mobile-only-action" onClick={() => setFlowerPickerOpen(true)}>Flower Gallery</button>
                 {objects.length > 0 && <button type="button" onClick={() => openMobileProperty("arrange")}>Arrange & Layers</button>}
                 {selectedObject && <button type="button" onClick={() => openMobileProperty("selected")}>Selected Object Properties</button>}
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
@@ -4185,7 +4207,8 @@ function deletePage(pageId) {
             <button type="button" title="Redo" aria-label="Redo" disabled={!redoStack.length} onClick={redo}><span aria-hidden="true">↷</span><span className="command-label">Redo</span></button>
             <span className="command-divider" />
             <button type="button" title="Import image" onClick={() => uploadRef.current?.click()}><span aria-hidden="true">▧</span><span className="command-label">Image</span></button>
-            <button type="button" title="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span aria-hidden="true">◇</span><span className="command-label">SVG</span></button>
+            <button type="button" title="Open flower collection" onClick={() => setFlowerPickerOpen(true)}><span aria-hidden="true">&#127800;</span><span className="command-label">Flowers</span></button>
+            <button type="button" title="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span aria-hidden="true">&#9671;</span><span className="command-label">SVG</span></button>
             <button type="button" title="Export poster" onClick={() => openExport("png")}><span aria-hidden="true">⇧</span><span className="command-label">Export</span></button>
             <span className="command-divider" />
             <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
@@ -4247,7 +4270,8 @@ function deletePage(pageId) {
             <button type="button" className={activeTool === "pen" ? "is-current" : ""} title="Pen / Bezier" aria-label="Pen tool" aria-pressed={activeTool === "pen"} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}><span>⌁</span></button>
             <button type="button" className={activeTool === "freehand" ? "is-current" : ""} title="Freehand drawing" aria-label="Freehand tool" aria-pressed={activeTool === "freehand"} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}><span>〰</span></button>
             <button type="button" title="Import image" aria-label="Import image" onClick={() => uploadRef.current?.click()}><span>▧</span></button>
-            <button type="button" title="Import editable SVG" aria-label="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span>◇</span></button>
+            <button type="button" title="Open flower collection" aria-label="Open flower collection" onClick={() => setFlowerPickerOpen(true)}><span>&#127800;</span></button>
+            <button type="button" title="Import editable SVG" aria-label="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span>&#9671;</span></button>
             <button type="button" title="Background remover" aria-label="Remove image background" disabled={selectedObject?.type !== "image"} onClick={() => setEditingImageId(selectedObject.id)}><span>✧</span></button>
             <label className="toolbox-color" title="Set selected object or drawing color"><span>◐</span><input type="color" aria-label="Selected object or drawing color" value={selectedObject?.color ?? vectorFill} onFocus={() => selectedObject && saveHistory()} onChange={(event) => selectedObject ? updateSelected({ color: event.target.value }) : setVectorFill(event.target.value)} /></label>
             <span className="toolbox-divider" />
@@ -4725,7 +4749,27 @@ function deletePage(pageId) {
             </div>
           </section>
         </div>}
-        {editingImageId != null && objects.find((object) => object.id === editingImageId)?.type === "image" && (
+        {flowerPickerOpen && (
+          <div className="flower-picker-backdrop" onClick={() => setFlowerPickerOpen(false)}>
+            <section
+              className="flower-picker"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="flower-picker-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <header className="flower-picker-header">
+                <div>
+                  <span>DESIGN ELEMENTS</span>
+                  <h2 id="flower-picker-title">🌸 Flower Collection</h2>
+                  <p>Choose a flower to add it to your poster</p>
+                </div>
+                <button type="button" aria-label="Close flowers" onClick={() => setFlowerPickerOpen(false)}>×</button>
+              </header>
+              <FlowerPanel onAddFlower={addFlower} />
+            </section>
+          </div>
+        )}        {editingImageId != null && objects.find((object) => object.id === editingImageId)?.type === "image" && (
           <BackgroundRemover
             imageSrc={objects.find((object) => object.id === editingImageId).src}
             onApply={applyImageEdit}
