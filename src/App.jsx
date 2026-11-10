@@ -21,6 +21,7 @@ import { cropRectToSource, getCroppedImageAspectRatio, normalizeCropRect } from 
 import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackgroundMode, getJpegQuality, getPrintExportDimensions, getPresetPhysicalSize, readProjectDocumentMeta, toCssPixels } from "./utils/documentUnits.js";
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
+import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
 
 const canvasSizes = {
   "Instagram Post 1080x1080": { width: 1080, height: 1080 },
@@ -633,6 +634,7 @@ function App() {
     typeof window === "undefined" || !window.matchMedia(COMPACT_EDITOR_QUERY).matches
   ));
   const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
+  const [documentSizeOpen, setDocumentSizeOpen] = useState(false);
   const [backgroundImage, setBackgroundImage] = useState(null);
   const [backgroundGradientColors, setBackgroundGradientColors] = useState(["#10261f", "#31704b", "#ddbf72"]);
   const [backgroundGradientThirdEnabled, setBackgroundGradientThirdEnabled] = useState(false);
@@ -856,6 +858,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     if (id == null) {
       setSelectedId(null);
       setSelectedIds([]);
+      if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) setMobilePropertiesOpen(false);
       return;
     }
     setSelectedId(id);
@@ -864,6 +867,16 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     setSelectedIds((current) => additive
       ? current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
       : [id]);
+    if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) {
+      setMobilePropertiesOpen(true);
+      const type = findObject(objects, id)?.type ?? (String(id).startsWith("text-") ? "text" : String(id).startsWith("image-") ? "image" : "shape");
+      window.setTimeout(() => {
+        const targetName = type === "text" ? "Text" : type === "image" ? "Image" : "Shape";
+        const groups = [...document.querySelectorAll(".properties-panel > .text-section")];
+        const target = groups.find((group) => group.querySelector("summary")?.textContent.trim() === targetName);
+        groups.forEach((group) => { group.open = group === target; });
+      }, 0);
+    }
   }
 
   function findLayerObject(items, value) {
@@ -886,6 +899,16 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     setSelectedId(ids.at(-1) ?? null);
     setGroupEditMode(Boolean(child));
     setGroupEditGroupId(child?.id ?? null);
+    if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) {
+      setMobilePropertiesOpen(ids.length > 0);
+      const selected = ids.length ? findObject(objects, ids.at(-1)) : null;
+      window.setTimeout(() => {
+        const name = selected?.type === "text" ? "Text" : selected?.type === "image" ? "Image" : "Shape";
+        const groups = [...document.querySelectorAll(".properties-panel > .text-section")];
+        const target = groups.find((group) => group.querySelector("summary")?.textContent.trim() === name);
+        groups.forEach((group) => { group.open = Boolean(target) && group === target; });
+      }, 0);
+    }
   }
 
   function findParentGroup(items, id) {
@@ -995,7 +1018,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       const target = targetSelector
         ? document.querySelector(targetSelector)
         : [...document.querySelectorAll(".properties-panel > .text-section")].find((item) => (
-            item.querySelector("summary")?.textContent.trim() === (selectedObject?.type === "text" ? "Text" : selectedObject?.type === "image" ? "Image Effects" : "Transform")
+            item.querySelector("summary")?.textContent.trim() === (selectedObject?.type === "text" ? "Text" : selectedObject?.type === "image" ? "Image" : "Shape")
           ));
       document.querySelectorAll(".properties-panel > .text-section[open]").forEach((item) => {
         if (item !== target) item.open = false;
@@ -1228,12 +1251,14 @@ function deletePage(pageId) {
 
   function startBlankPoster() {
     resetProjectState();
+    setDocumentSizeOpen(window.matchMedia(COMPACT_EDITOR_QUERY).matches);
     setEditor(true);
   }
 
   function createNewProject() {
     if (!window.confirm("Start a new poster? Unsaved changes in this canvas will be cleared.")) return;
     resetProjectState();
+    if (window.matchMedia(COMPACT_EDITOR_QUERY).matches) setDocumentSizeOpen(true);
   }
 
   function openTemplate(template) {
@@ -3253,6 +3278,7 @@ function deletePage(pageId) {
             context.translate(x, y);
             context.rotate(((object.rotation ?? 0) * Math.PI) / 180);
             context.scale(object.flipHorizontal ? -1 : 1, object.flipVertical ? -1 : 1);
+            context.filter = imageFiltersToCss(object.imageFilters);
             if (crop) context.drawImage(loaded.image, crop.x, crop.y, crop.width, crop.height, -width / 2, -height / 2, width, height);
             else context.drawImage(loaded.image, -width / 2, -height / 2, width, height);
             context.restore();
@@ -3486,8 +3512,8 @@ function deletePage(pageId) {
           </svg>}
           {object.type === "shape" && !vectorShape && <span className={`canvas-shape shape-${object.shape ?? "line"}`} style={{ width: `${object.width ?? 140}px`, height: `${object.height ?? 16}px`, backgroundColor: object.shape === "circle-outline" ? "transparent" : object.color, borderColor: object.color }} />}
           {object.type === "image" && (imageCrop ? <div className="canvas-image-viewport" style={{ aspectRatio: imageAspectRatio }}>
-            <img className="canvas-image canvas-image--cropped" src={object.src} alt="Cropped poster element" style={{ left: `${-imageCrop.x / imageCrop.width * 100}%`, top: `${-imageCrop.y / imageCrop.height * 100}%`, width: `${100 / imageCrop.width}%`, height: `${100 / imageCrop.height}%` }} />
-          </div> : <img className="canvas-image" src={object.src} alt="Uploaded poster element" />)}
+            <img className="canvas-image canvas-image--cropped" src={object.src} alt="Cropped poster element" style={{ left: `${-imageCrop.x / imageCrop.width * 100}%`, top: `${-imageCrop.y / imageCrop.height * 100}%`, width: `${100 / imageCrop.width}%`, height: `${100 / imageCrop.height}%`, filter: imageFiltersToCss(object.imageFilters) }} />
+          </div> : <img className="canvas-image" src={object.src} alt="Uploaded poster element" style={{ filter: imageFiltersToCss(object.imageFilters) }} />)}
         </div>
         {selected && !object.locked && resizeCorners.map((corner) => (
           <button
@@ -3701,25 +3727,18 @@ function deletePage(pageId) {
         <div className="editor-workspace">
           <main className="editor-stage">
             <div className="stage-heading"><div><span>YOUR CANVAS</span><h1>{templateName}</h1></div>
-              <div className="size-picker">
-                <label htmlFor="canvas-size">Canvas size<select id="canvas-size" value={canvasSize} onChange={(event) => setCanvasSize(event.target.value)}>
-                  {Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}
-                  <option value="Custom">Custom dimensions</option>
+              <div className="size-picker desktop-size-picker">
+                <label htmlFor="desktop-canvas-size">Canvas size<select id="desktop-canvas-size" value={canvasSize} onChange={(event) => setCanvasSize(event.target.value)}>
+                  {Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option>
                 </select></label>
-                <label htmlFor="canvas-unit">Units<select id="canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}>
-                  <option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option>
-                </select></label>
-                {canvasSize === "Custom" && <div className="custom-size-fields">
-                  <label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label>
-                  <label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label>
-                </div>}
+                <label htmlFor="desktop-canvas-unit">Units<select id="desktop-canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option></select></label>
+                {canvasSize === "Custom" && <div className="custom-size-fields"><label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
                 {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}
                 {canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
-                <label htmlFor="print-dpi">Print resolution<select id="print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
-                <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span>
-                <small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>
-                {dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
+                <label htmlFor="desktop-print-dpi">Print resolution<select id="desktop-print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
+                <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span><small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>{dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
               </div>
+              <button type="button" className="document-size-trigger" onClick={() => setDocumentSizeOpen(true)}>▱ <span>Size</span><small>{canvasSize}</small></button>
             </div>
             <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
               <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
@@ -4065,6 +4084,8 @@ function deletePage(pageId) {
               </details>
             </>}
             {selectedObject?.type === "shape" && <>
+              <details className="text-section">
+                <summary>Shape</summary>
               <label className="field-label color-label">Shape color<input type="color" value={selectedObject.color} onChange={(event) => updateSelected({ color: event.target.value })} /></label>
               {selectedObject.shape === "custom" && <>
                 <label className="effect-toggle"><input type="checkbox" checked={selectedObject.fillEnabled !== false} onChange={(event) => updateSelected({ fillEnabled: event.target.checked })} />Fill enabled</label>
@@ -4090,8 +4111,11 @@ function deletePage(pageId) {
                 <button disabled={selectedLayerIndex <= 0} onClick={() => moveSelectedLayer(-1)}>Send Backward</button>
               </div>
               <p className="panel-hint">Drag the shape on the canvas to position it.</p>
+              </details>
             </>}
             {selectedObject?.type === "image" && <>
+              <details className="text-section">
+                <summary>Image</summary>
               <button className="replace-image-btn" type="button" onClick={beginImageCrop}>Crop image</button>
               <button className="replace-image-btn" type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit image / Remove background</button>
               <button className="replace-image-btn" onClick={() => uploadRef.current?.click()}>Replace image</button>
@@ -4101,6 +4125,23 @@ function deletePage(pageId) {
               <input id="image-rotation" className="size-range" type="range" min="-180" max="180" value={selectedObject.rotation ?? 0} onPointerDown={saveHistory} onChange={(event) => updateSelected({ rotation: Number(event.target.value) })} />
               <label className="field-label" htmlFor="image-opacity">Transparency <span>{100 - (selectedObject.opacity ?? 100)}%</span></label>
               <input id="image-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.opacity ?? 100} onPointerDown={saveHistory} onChange={(event) => updateSelected({ opacity: Number(event.target.value) })} />
+              </details>
+              <details className="text-section image-filters-section">
+                <summary>Image Filters</summary>
+                <div className="image-filter-presets" aria-label="Image filter presets">
+                  {Object.entries(IMAGE_FILTER_PRESETS).map(([name, filters]) => <button key={name} type="button" onClick={() => { saveHistory(); updateSelected({ imageFilters: { ...filters } }); }}>{name}</button>)}
+                </div>
+                {[
+                  ["brightness", "Brightness", 0, 200, "%", 100], ["contrast", "Contrast", 0, 200, "%", 100],
+                  ["saturation", "Saturation", 0, 200, "%", 100], ["exposure", "Exposure", -2, 2, " EV", 0],
+                  ["warmth", "Warmth", -100, 100, "", 0], ["hue", "Hue", -180, 180, "°", 0],
+                  ["blur", "Blur", 0, 20, "px", 0], ["grayscale", "Grayscale", 0, 100, "%", 0], ["sepia", "Sepia", 0, 100, "%", 0],
+                ].map(([key, label, min, max, unit, fallback]) => {
+                  const value = normalizeImageFilters(selectedObject.imageFilters)[key] ?? fallback;
+                  return <div className="image-filter-control" key={key}><label className="field-label" htmlFor={`image-filter-${key}`}>{label}<span>{value}{unit}</span></label><input id={`image-filter-${key}`} aria-label={`${label} adjustment`} className="size-range" type="range" min={min} max={max} step={key === "exposure" ? 0.05 : 1} value={value} onPointerDown={saveHistory} onChange={(event) => updateSelected({ imageFilters: { ...normalizeImageFilters(selectedObject.imageFilters), [key]: Number(event.target.value) } })} /></div>;
+                })}
+                <button type="button" className="replace-image-btn" onClick={() => { saveHistory(); updateSelected({ imageFilters: { ...DEFAULT_IMAGE_FILTERS } }); }}>Reset Filters</button>
+              </details>
               <details className="text-section image-effects-section">
                 <summary>Image Effects</summary>
                 <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.imageOutlineEnabled)} onChange={(event) => { saveHistory(); updateSelected({ imageOutlineEnabled: event.target.checked }); }} />Enable outline</label>
@@ -4137,6 +4178,20 @@ function deletePage(pageId) {
             {!selectedObject && <p className="panel-empty">Choose a tool to add an element to your poster.</p>}
           </aside>
         </div>
+        {documentSizeOpen && <div className="document-size-backdrop" role="presentation">
+          <section className="document-size-dialog" role="dialog" aria-modal="true" aria-labelledby="document-size-title">
+            <header className="document-size-header"><div><span>NEW POSTER</span><h2 id="document-size-title">Choose document size</h2></div><button type="button" aria-label="Close document size settings" onClick={() => setDocumentSizeOpen(false)}>×</button></header>
+            <div className="size-picker mobile-size-picker">
+              <label htmlFor="mobile-canvas-size">Canvas size<select id="mobile-canvas-size" value={canvasSize} onChange={(event) => { setCanvasSize(event.target.value); if (event.target.value !== "Custom") setDocumentSizeOpen(false); }}>{Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option></select></label>
+              <label htmlFor="mobile-canvas-unit">Units<select id="mobile-canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option></select></label>
+              {canvasSize === "Custom" && <div className="custom-size-fields"><label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
+              {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}{canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
+              <label htmlFor="mobile-print-dpi">Print resolution<select id="mobile-print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
+              <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span><small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>{dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
+            </div>
+            <footer className="document-size-footer"><button type="button" onClick={() => setDocumentSizeOpen(false)}>Use this size</button></footer>
+          </section>
+        </div>}
         {shapePickerOpen && <div className="shape-picker-backdrop" onClick={() => setShapePickerOpen(false)}>
           <section className="shape-picker" role="dialog" aria-modal="true" aria-labelledby="shape-picker-title" onClick={(event) => event.stopPropagation()}>
             <header className="shape-picker-header"><div><span>VECTOR COLLECTION</span><h2 id="shape-picker-title">Choose an Islamic shape</h2></div><button aria-label="Close shapes" onClick={() => setShapePickerOpen(false)}>×</button></header>
