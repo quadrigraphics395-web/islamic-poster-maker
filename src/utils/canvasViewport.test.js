@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fitCanvasToViewport, mobilePropertiesWidth } from "./canvasViewport.js";
+import { clampCanvasPan, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./canvasViewport.js";
 
 test("A4 portrait keeps its physical aspect ratio when fitted to a narrow mobile workspace", () => {
   const fitted = fitCanvasToViewport(794, 1123, 220, 320);
@@ -48,4 +48,31 @@ test("mobile properties column stays near one quarter of 360, 390, and 430 pixel
 test("invalid or zero viewport values return an empty fit", () => {
   assert.deepEqual(fitCanvasToViewport(794, 1123, 0, 300), { width: 0, height: 0, scale: 0 });
   assert.deepEqual(fitCanvasToViewport(794, 1123, 200, 300, 0), { width: 0, height: 0, scale: 0 });
+});
+
+test("panning clamps a zoomed page to the viewport edges so it cannot disappear", () => {
+  assert.deepEqual(clampCanvasPan({ x: 900, y: -900 }, 800, 1000, 500, 600, 2), { x: 550, y: -700 });
+  assert.deepEqual(clampCanvasPan({ x: -80, y: 90 }, 400, 500, 500, 600, 1), { x: 0, y: 0 });
+});
+
+test("panning remains available only on the axes that overflow the workspace", () => {
+  assert.deepEqual(clampCanvasPan({ x: 900, y: 300 }, 800, 300, 500, 600, 2), { x: 550, y: 0 });
+});
+
+test("invalid pan geometry falls back to a centered canvas", () => {
+  assert.deepEqual(clampCanvasPan({ x: 30, y: -15 }, 800, 1000, 500, 600, 0), { x: 0, y: 0 });
+  assert.deepEqual(clampCanvasPan({ x: Infinity, y: NaN }, 800, 1000, 500, 600, 2), { x: 0, y: 0 });
+});
+
+test("zoom offset keeps the document point under the pointer fixed", () => {
+  const before = { x: -80, y: 30 };
+  const next = zoomOffsetAtPoint(before, 1, 1.5, 180, 220, 500, 400, 800, 700);
+  const docX = (180 - 250 - before.x) / 1;
+  const docY = (220 - 200 - before.y) / 1;
+  assert.ok(Math.abs((250 + next.x + docX * 1.5) - 180) < 1e-9);
+  assert.ok(Math.abs((200 + next.y + docY * 1.5) - 220) < 1e-9);
+});
+
+test("zoom offset respects pan bounds when the requested anchor cannot be retained", () => {
+  assert.deepEqual(zoomOffsetAtPoint({ x: 0, y: 0 }, 1, 3, 0, 0, 500, 400, 200, 200), { x: 50, y: 100 });
 });

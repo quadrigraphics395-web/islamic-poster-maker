@@ -2356,6 +2356,9 @@ footer {
   cursor: crosshair;
 }
 
+.poster-canvas.tool-pan { cursor: grab; }
+.poster-canvas.tool-pan:active { cursor: grabbing; }
+
 .vector-menu-panel {
   min-width: 275px;
 }
@@ -3798,6 +3801,230 @@ body {
   .size-picker-physical, .size-picker-print, .size-picker-help, .size-picker-error { grid-column: 1 / -1; }
   .size-picker > label { min-width: 0; font-size: 10px; }
   .size-picker select, .size-picker input { width: 100%; min-width: 0; }
+}
+
+/* Desktop studio layout: compact command bars, a persistent tool rail, and a flexible canvas. */
+@media (min-width: 601px) {
+  .editor-topbar {
+    min-height: 54px;
+    flex: 0 0 54px;
+    gap: clamp(6px, 1vw, 14px);
+    padding-inline: clamp(10px, 1.4vw, 20px);
+    background: #fff;
+  }
+
+  .editor-topbar .back-btn { min-height: 34px; padding: 0 10px; font-size: 11px; }
+  .editor-brand { flex-basis: 172px; gap: 8px; }
+  .editor-brand .logo { width: 32px; height: 32px; }
+  .editor-brand strong { font-size: 12px; }
+  .editor-brand small { max-width: 130px; font-size: 10px; }
+  .editor-menu-bar { gap: 1px; overflow: visible; }
+  .editor-menu > summary { min-height: 34px; gap: 5px; padding-inline: 8px; border-radius: 6px; font-size: 11px; }
+  .editor-menu#editor-menu-project { order: -6; }
+  .editor-menu#editor-menu-edit { order: -5; }
+  .editor-menu#editor-menu-more { order: -4; }
+  .editor-menu#editor-menu-add { order: -3; }
+  .editor-menu#editor-menu-arrange { order: -2; }
+  .editor-menu#editor-menu-vector { order: -1; }
+  .editor-menu#editor-menu-text { order: 1; }
+  .editor-menu#editor-menu-effects { order: 2; }
+  .editor-menu#editor-menu-help { order: 3; }
+  .editor-menu#editor-menu-more .editor-menu-panel,
+  .editor-menu#editor-menu-help .editor-menu-panel { right: 0; left: auto; }
+  .editor-topbar .history-actions { gap: 4px; }
+  .editor-topbar .history-actions,
+  .editor-topbar .export-actions { display: none; }
+  .editor-topbar .history-actions button { min-width: 38px; min-height: 34px; padding-inline: 6px; font-size: 11px; }
+  .editor-topbar .history-actions button > span:first-child { font-size: 17px; }
+  .editor-topbar .export-actions button { min-height: 34px; padding-inline: 11px; }
+
+  .editor-command-bar {
+    position: relative;
+    z-index: 8;
+    min-width: 0;
+    min-height: 52px;
+    flex: 0 0 52px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px clamp(10px, 1.4vw, 20px);
+    border-bottom: 1px solid #dfe5df;
+    background: #fdfefd;
+  }
+
+  .editor-command-actions,
+  .editor-context-toolbar {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  .editor-command-actions { flex: 0 0 auto; }
+  .editor-context-toolbar {
+    flex: 1 1 auto;
+    min-height: 38px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-left: 8px;
+    border-left: 1px solid #e1e6e1;
+  }
+
+  .editor-command-bar button,
+  .editor-context-toolbar select,
+  .editor-context-toolbar > label:not(.context-color) {
+    min-height: 32px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 8px;
+    border: 1px solid #dce3dc;
+    border-radius: 6px;
+    background: #fff;
+    color: #334a3d;
+    font: inherit;
+    font-size: 11px;
+  }
+
+  .editor-command-bar button { cursor: pointer; }
+  .editor-command-bar button:hover,
+  .editor-context-toolbar button:hover { border-color: #b9cbbd; background: #f1f6f1; }
+  .editor-command-bar button:disabled { opacity: .42; cursor: default; }
+  .editor-command-actions button > span:first-child { color: #1c7653; font-size: 16px; font-weight: 700; }
+  .editor-command-actions .page-setup-action { gap: 6px; }
+  .page-setup-action small { max-width: 155px; overflow: hidden; color: #748177; font-size: 9px; font-weight: 500; text-overflow: ellipsis; }
+  .command-divider { width: 1px; height: 25px; flex: 0 0 1px; margin-inline: 3px; background: #e1e6e1; }
+  .command-zoom-value { min-width: 38px; color: #637168; font-size: 10px; text-align: center; }
+  .editor-context-toolbar { color: #66746a; font-size: 10px; }
+  .context-object-label { flex: 0 0 auto; padding-inline: 5px; color: #236847; font-size: 10px; font-weight: 700; text-transform: capitalize; }
+  .context-empty { min-width: 0; overflow: hidden; color: #7c887f; text-overflow: ellipsis; }
+  .editor-context-toolbar > label:not(.context-color) { gap: 4px; padding: 0 4px 0 7px; }
+  .editor-context-toolbar input[type="number"] { width: 56px; min-width: 0; height: 24px; padding: 0 3px; border: 0; border-left: 1px solid #e5e9e5; border-radius: 0; color: #2f4438; font: inherit; font-size: 11px; }
+  .editor-context-toolbar label[title="Rotation"] input { width: 46px; }
+  .editor-context-toolbar label small { color: #88938c; font-size: 9px; }
+  .editor-context-toolbar select { max-width: 150px; min-height: 32px; padding-inline: 6px; font-size: 10px; }
+  .editor-context-toolbar button { min-height: 30px; flex: 0 0 auto; padding: 0 8px; border: 1px solid #dce3dc; border-radius: 6px; background: white; color: #334a3d; font: inherit; font-size: 10px; cursor: pointer; }
+  .editor-context-toolbar button:disabled { opacity: .42; cursor: default; }
+  .editor-context-toolbar .context-delete-action { color: #a3483d; }
+  .editor-context-toolbar button.is-current,
+  .editor-context-toolbar button[aria-pressed="true"] { border-color: #9bbba5; background: #eaf3eb; color: #145e3d; }
+  .editor-context-toolbar .context-color { position: relative; width: 33px; height: 30px; flex: 0 0 33px; display: grid; place-items: center; border: 1px solid #dce3dc; border-radius: 6px; background: #fff; cursor: pointer; }
+  .context-color span { color: #236847; font-size: 17px; }
+  .context-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  .editor-context-toolbar .properties-collapse-toggle { min-width: 32px; margin-left: auto; font-size: 16px; }
+  .editor-menu-help { margin: 5px 7px; color: #58675d; font-size: 11px; line-height: 1.55; white-space: normal; }
+  .editor-menu-help strong { color: #2b4938; }
+  .editor-effect-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
+  .editor-effect-presets button { min-width: 0; padding-inline: 6px; font-size: 10px; }
+
+  .editor-workspace { grid-template-columns: 54px minmax(0, 1fr) minmax(250px, 22vw); }
+  .editor-workspace.is-properties-collapsed { grid-template-columns: 54px minmax(0, 1fr) 0; }
+  .editor-toolbox {
+    position: relative;
+    z-index: 5;
+    min-height: 0;
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 9px 6px 12px;
+    border-right: 1px solid #dce3dc;
+    background: #fff;
+    scrollbar-width: thin;
+  }
+  .toolbox-section-label { width: 100%; padding: 6px 0 2px; color: #879188; font-size: 7px; font-weight: 800; letter-spacing: .07em; text-align: center; }
+  .toolbox-divider { width: 28px; height: 1px; flex: 0 0 1px; margin: 4px 0; background: #e4e9e4; }
+  .editor-toolbox > button,
+  .toolbox-color {
+    position: relative;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #43594b;
+    font: inherit;
+    cursor: pointer;
+  }
+  .editor-toolbox > button > span,
+  .toolbox-color > span { width: auto; color: inherit; font-size: 19px; font-weight: 600; text-align: center; }
+  .editor-toolbox > button:hover,
+  .toolbox-color:hover { border-color: #dce6dd; background: #f4f7f4; }
+  .editor-toolbox > button.is-current,
+  .editor-toolbox > button[aria-pressed="true"] { border-color: #b7d1bd; background: #e9f3ea; color: #12613e; box-shadow: inset 2px 0 #268052; }
+  .editor-toolbox > button:disabled { opacity: .34; cursor: default; }
+  .toolbox-color { border-color: #e1e7e1; cursor: pointer; }
+  .toolbox-color input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; opacity: 0; cursor: pointer; }
+  .editor-toolbox button:focus-visible,
+  .toolbox-color:focus-within { outline: 2px solid #367e59; outline-offset: 1px; }
+  .editor-stage { grid-column: 2; grid-row: 1; min-width: 0; padding: clamp(12px, 1.6vw, 24px); }
+  .editor-stage > .stage-heading,
+  .editor-stage > .canvas-view-controls,
+  .editor-stage > .canvas-caption { display: none; }
+  .editor-stage .stage-heading { flex: 0 0 auto; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .editor-stage .stage-heading h1 { max-width: 240px; overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+  .editor-stage .desktop-size-picker { max-width: min(76%, 820px); }
+  .editor-stage .canvas-wrap { min-height: 0; min-width: 0; overflow: hidden; }
+  .properties-panel { grid-column: 3; grid-row: 1; min-width: 0; width: auto; overflow-x: hidden; overflow-y: auto; border-left: 1px solid #dce3dc; }
+  .is-properties-collapsed .properties-panel { display: none; }
+}
+
+@media (min-width: 601px) and (max-width: 1100px) {
+  .editor-topbar { gap: 6px; padding-inline: 8px; }
+  .editor-brand { flex-basis: 145px; }
+  .editor-brand strong { font-size: 10px; }
+  .editor-brand small { max-width: 110px; font-size: 9px; }
+  .editor-menu > summary { padding-inline: 5px; font-size: 9px; }
+  .editor-topbar .history-actions button { min-width: 32px; }
+  .history-action-label { display: none; }
+  .editor-workspace { grid-template-columns: 48px minmax(0, 1fr) 230px; }
+  .editor-workspace.is-properties-collapsed { grid-template-columns: 48px minmax(0, 1fr) 0; }
+  .editor-command-bar { gap: 5px; padding-inline: 7px; }
+  .editor-command-actions { gap: 2px; }
+  .editor-command-bar button { padding-inline: 5px; }
+  .command-label { display: none; }
+  .page-setup-action small { display: none; }
+  .editor-context-toolbar { gap: 3px; padding-left: 5px; }
+  .editor-context-toolbar input[type="number"] { width: 42px; }
+  .editor-context-toolbar select { max-width: 110px; }
+  .editor-stage { padding: 10px; }
+  .editor-stage .desktop-size-picker { max-width: 70%; }
+}
+
+@media (min-width: 601px) {
+  .editor-stage { padding: clamp(8px, 1vw, 16px); }
+  .editor-stage .canvas-wrap { flex: 1 1 auto; }
+  .document-size-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(86dvh, 820px); }
+  .document-size-header p { margin: 5px 0 0; color: #68776d; font-size: 11px; }
+  .page-setup-background { margin-top: 18px; padding-top: 14px; border-top: 1px solid #e1e7e1; }
+  .page-setup-background > h3 { margin: 0 0 9px; color: #2d4838; font-size: 13px; }
+  .page-setup-background > .background-properties { margin: 0; padding: 0; border: 0; }
+}
+
+@media (max-width: 600px) {
+  .editor-command-bar,
+  .editor-toolbox,
+  .editor-menu-desktop-only { display: none !important; }
+  .editor-menu#editor-menu-project,
+  .editor-menu#editor-menu-edit,
+  .editor-menu#editor-menu-more,
+  .editor-menu#editor-menu-add,
+  .editor-menu#editor-menu-arrange,
+  .editor-menu#editor-menu-vector { order: 0; }
+  .editor-workspace.is-properties-collapsed { grid-template-columns: minmax(0, 1fr) var(--mobile-properties-width); }
+  .editor-workspace.is-properties-collapsed .properties-panel { display: block; }
 }
 
 .home-logo-trigger {

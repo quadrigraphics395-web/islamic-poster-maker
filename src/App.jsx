@@ -22,7 +22,7 @@ import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackg
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
-import { fitCanvasToViewport, mobilePropertiesWidth } from "./utils/canvasViewport.js";
+import { clampCanvasPan, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./utils/canvasViewport.js";
 import { importSvgDocument } from "./utils/svgImport.js";
 import { isEditableKeyboardTarget } from "./utils/editorKeyboard.js";
 
@@ -630,6 +630,8 @@ function App() {
   ));
   const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
   const [documentSizeOpen, setDocumentSizeOpen] = useState(false);
+  const [desktopPropertiesCollapsed, setDesktopPropertiesCollapsed] = useState(false);
+  const [openEditorMenuId, setOpenEditorMenuId] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? 360 : window.innerWidth);
   const [backgroundImage, setBackgroundImage] = useState(null);
   const [backgroundGradientColors, setBackgroundGradientColors] = useState(["#10261f", "#31704b", "#ddbf72"]);
@@ -658,6 +660,7 @@ const personalFontInputRef = useRef(null);
   const [selectionMarquee, setSelectionMarquee] = useState(null);
   const [canvasViewOffset, setCanvasViewOffset] = useState({ x: 0, y: 0 });
   const [canvasZoom, setCanvasZoom] = useState(1);
+  const [clipboardReady, setClipboardReady] = useState(false);
   const [canvasViewportSize, setCanvasViewportSize] = useState({ width: 0, height: 0 });
   const [groupEditMode, setGroupEditMode] = useState(false);
   const [groupEditGroupId, setGroupEditGroupId] = useState(null);
@@ -767,6 +770,52 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const baselinePendingRef = useRef(true);
   const skipRecoveryWriteRef = useRef(false);
 
+  function copySelected() {
+    const selected = selectedIds.map((id) => {
+      const object = findObject(objects, id);
+      if (!object) return null;
+      const parent = findParentGroup(objects, id);
+      if (!parent) return object;
+      const transformed = transformGroupChild(object, parent);
+      delete transformed.groupId;
+      return transformed;
+    }).filter(Boolean);
+    if (!selected.length) return;
+    objectClipboardRef.current = JSON.parse(JSON.stringify(selected));
+    setClipboardReady(true);
+  }
+
+  function cutSelected() {
+    if (!selectedIds.length) return;
+    copySelected();
+    saveHistory();
+    setObjects((current) => removeObjectsById(current, new Set(selectedIds)));
+    selectObject(null);
+  }
+
+  function pasteObjects() {
+    const copies = objectClipboardRef.current;
+    if (!copies.length) return;
+    const cloneWithNewIds = (object) => ({
+      ...object,
+      ...(object.type === "group" ? { children: object.children.map(cloneWithNewIds) } : {}),
+      id: nextObjectId("paste"),
+      x: Math.min(96, object.x + 5),
+      y: Math.min(96, object.y + 5),
+    });
+    const pasted = copies.map(cloneWithNewIds);
+    saveHistory();
+    setObjects((current) => [...current, ...pasted]);
+    setSelectedIds(pasted.map((object) => object.id));
+    setSelectedId(pasted.at(-1)?.id ?? null);
+  }
+
+  function selectAllObjects() {
+    const ids = objects.map((object) => object.id);
+    setSelectedIds(ids);
+    setSelectedId(ids.at(-1) ?? null);
+  }
+
   useEffect(() => {
     let active = true;
     checkAdminSession().then((admin) => listOnlineTemplates(admin).then((online) => [admin, online])).then(([admin, online]) => {
@@ -797,6 +846,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const projectFileInputRef = useRef(null);
   const canvasRef = useRef(null);
   const canvasWrapRef = useRef(null);
+  const objectClipboardRef = useRef([]);
   const projectExtrasRef = useRef({});
   const dragRef = useRef(null);
   const canvasPointersRef = useRef(new Map());
@@ -870,16 +920,49 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     canvasViewportSize.height || dimensions.height,
   );
   useEffect(() => {
+    if (!editor || !canvasWrapRef.current) return undefined;
+    const workspace = canvasWrapRef.current;
+    const onWheel = (event) => {
+      if (event.target.closest("input, textarea, select, [contenteditable='true'], .editor-menu, .properties-panel, [data-wheel-scroll]")) return;
+      if (!event.deltaY) return;
+      event.preventDefault();
+      const bounds = workspace.getBoundingClientRect();
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? bounds.height : 1);
+      const nextZoom = Math.min(3, Math.max(0.5, canvasZoom * Math.pow(1.2, -delta / 100)));
+      if (nextZoom === canvasZoom) return;
+      setCanvasZoom(nextZoom);
+      setCanvasViewOffset((current) => zoomOffsetAtPoint(
+        current, canvasZoom, nextZoom, event.clientX - bounds.left, event.clientY - bounds.top,
+        bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height,
+      ));
+    };
+    workspace.addEventListener("wheel", onWheel, { passive: false });
+    return () => workspace.removeEventListener("wheel", onWheel);
+  }, [editor, canvasZoom, fittedCanvas.width, fittedCanvas.height]);
+
+  useEffect(() => {
+    if (!editor) return undefined;
+    const closeMenusOutside = (event) => {
+      if (event.target.closest(".editor-menu")) return;
+      setOpenEditorMenuId(null);
+    };
+    document.addEventListener("pointerdown", closeMenusOutside);
+    return () => document.removeEventListener("pointerdown", closeMenusOutside);
+  }, [editor]);
+  useEffect(() => {
     if (!editor) return undefined;
     const element = canvasWrapRef.current;
     if (!element) return undefined;
     const measure = () => {
       const bounds = element.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
       setCanvasViewportSize((current) => (
         Math.abs(current.width - bounds.width) < 0.5 && Math.abs(current.height - bounds.height) < 0.5
           ? current
           : { width: bounds.width, height: bounds.height }
       ));
+      const nextFit = fitCanvasToViewport(dimensions.width, dimensions.height, bounds.width, bounds.height);
+      setCanvasViewOffset((current) => clampCanvasPan(current, nextFit.width, nextFit.height, bounds.width, bounds.height, canvasZoom));
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(element);
@@ -890,7 +973,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       window.cancelAnimationFrame(firstMeasure);
       window.removeEventListener("resize", measure);
     };
-  }, [editor, dimensions.width, dimensions.height]);
+  }, [editor, dimensions.width, dimensions.height, canvasZoom]);
   useEffect(() => {
     setCanvasZoom(1);
     setCanvasViewOffset({ x: 0, y: 0 });
@@ -1049,8 +1132,28 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     setCanvasZoom(1);
   }
 
+  function closePageSetup() {
+    setDocumentSizeOpen(false);
+    resetCanvasView();
+  }
+
+  function clampCanvasViewOffset(offset, zoom = canvasZoom) {
+    const wrap = canvasWrapRef.current;
+    const viewportWidth = canvasViewportSize.width || wrap?.clientWidth || fittedCanvas.width;
+    const viewportHeight = canvasViewportSize.height || wrap?.clientHeight || fittedCanvas.height;
+    return clampCanvasPan(offset, fittedCanvas.width, fittedCanvas.height, viewportWidth, viewportHeight, zoom);
+  }
+
   function changeCanvasZoom(multiplier) {
-    setCanvasZoom((current) => Math.min(3, Math.max(0.5, current * multiplier)));
+    const nextZoom = Math.min(3, Math.max(0.5, canvasZoom * multiplier));
+    setCanvasZoom(nextZoom);
+    setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
+  }
+
+  function zoomCanvasToActualSize() {
+    const nextZoom = Math.min(3, Math.max(0.5, 1 / Math.max(fittedCanvas.scale, 0.001)));
+    setCanvasZoom(nextZoom);
+    setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
   }
 
   function closeMobileProperties() {
@@ -1060,12 +1163,15 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   }
 
   function openMobileProperty(section) {
-    const targetSelector = section === "background"
-      ? ".properties-panel > .background-properties"
-      : section === "arrange"
-        ? ".properties-panel > .text-section:nth-of-type(2)"
-        : null;
-    setBackgroundPanelOpen(section === "background");
+    if (section === "background") {
+      setBackgroundPanelOpen(true);
+      setDocumentSizeOpen(true);
+      return;
+    }
+    const targetSelector = section === "arrange"
+      ? ".properties-panel > .text-section:nth-of-type(1)"
+      : null;
+    setBackgroundPanelOpen(false);
     window.setTimeout(() => {
       const target = targetSelector
         ? document.querySelector(targetSelector)
@@ -1341,6 +1447,11 @@ function deletePage(pageId) {
 
  function updateSelected(updates) {
     setObjects((current) => updateObjectById(current, selectedId, updates));
+  }
+
+  function updateSelectedFromToolbar(updates) {
+    saveHistory();
+    updateSelected(updates);
   }
 
   function beginImageCrop() {
@@ -2215,6 +2326,11 @@ function deletePage(pageId) {
     }
     if (event.button !== 0 || event.target.closest(".resize-handle, .vector-node-overlay, .group-selection-outline")) return;
     event.preventDefault();
+    if (activeTool === "pan") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = { type: "view-pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offset: canvasViewOffset };
+      return;
+    }
     if (activeTool === "select" && canvasZoom > 1 && !event.target.closest(".canvas-object")) {
       event.currentTarget.setPointerCapture(event.pointerId);
       dragRef.current = { type: "view-pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offset: canvasViewOffset };
@@ -2252,12 +2368,14 @@ function deletePage(pageId) {
       const points = [...canvasPointersRef.current.values()];
       if (points.length >= 2) {
         const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
-        setCanvasZoom(Math.min(3, Math.max(0.5, pinchRef.current.zoom * distance / pinchRef.current.distance)));
+        const nextZoom = Math.min(3, Math.max(0.5, pinchRef.current.zoom * distance / pinchRef.current.distance));
+        setCanvasZoom(nextZoom);
+        setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
       }
       return;
     }
     if (drag?.type === "view-pan" && drag.pointerId === event.pointerId) {
-      setCanvasViewOffset({ x: drag.offset.x + event.clientX - drag.startX, y: drag.offset.y + event.clientY - drag.startY });
+      setCanvasViewOffset(clampCanvasViewOffset({ x: drag.offset.x + event.clientX - drag.startX, y: drag.offset.y + event.clientY - drag.startY }));
       return;
     }
     if (activeTool === "freehand" && pathDraftRef.current && event.buttons) {
@@ -2361,6 +2479,11 @@ function deletePage(pageId) {
   useEffect(() => {
     function onKeyDown(event) {
       if (isEditableKeyboardTarget(event.target)) return;
+      if (event.key === "Escape" && openEditorMenuId) {
+        setOpenEditorMenuId(null);
+        event.preventDefault();
+        return;
+      }
       if (event.key === "Escape" && pathDraft) {
         event.preventDefault();
         changePathDraft(null);
@@ -2387,10 +2510,18 @@ function deletePage(pageId) {
         else groupSelected();
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        undo();
+        if (event.shiftKey) redo();
+        else undo();
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
         event.preventDefault();
         redo();
+      } else if ((event.ctrlKey || event.metaKey) && ["c", "x", "v", "a"].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        const key = event.key.toLowerCase();
+        if (key === "c") copySelected();
+        if (key === "x") cutSelected();
+        if (key === "v") pasteObjects();
+        if (key === "a") selectAllObjects();
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -2413,6 +2544,10 @@ function deletePage(pageId) {
   }
 
   function moveSelectedLayer(direction) {
+    const currentIndex = objects.findIndex((object) => object.id === selectedId);
+    const nextIndex = direction === "front" ? objects.length - 1 : direction === "back" ? 0 : Math.max(0, Math.min(objects.length - 1, currentIndex + direction));
+    if (currentIndex < 0 || nextIndex === currentIndex) return;
+    saveHistory();
     setObjects((current) => {
       const index = current.findIndex((object) => object.id === selectedId);
       const nextIndex = direction === "front"
@@ -3179,19 +3314,14 @@ function deletePage(pageId) {
     return () => { window.clearInterval(timer); window.clearTimeout(expiryTimer); window.removeEventListener("focus", validateSession); document.removeEventListener("visibilitychange", validateSession); };
   }, [isTemplateAdmin]);
   function toggleEditorMenu(event) {
-    const activeMenu = event.currentTarget.parentElement;
-    window.setTimeout(() => {
-      if (!activeMenu.open) return;
-      document.querySelectorAll(".editor-menu[open]").forEach((menu) => {
-        if (menu !== activeMenu) menu.open = false;
-      });
-    }, 0);
+    event.preventDefault();
+    const menuId = event.currentTarget.parentElement.id;
+    setOpenEditorMenuId((current) => current === menuId ? null : menuId);
   }
 
   function closeEditorMenuAfterAction(event) {
     if (!event.target.closest("button")) return;
-    const menu = event.currentTarget;
-    window.setTimeout(() => { menu.open = false; }, 0);
+    setOpenEditorMenuId(null);
   }
 
   function togglePropertyAccordion(event) {
@@ -3809,8 +3939,8 @@ function deletePage(pageId) {
           <button className="back-btn" onClick={() => setEditor(false)}>← Back</button>
           <div className="editor-brand"><span className="logo"><img src="/logo.png" alt="" /></span><div><strong>Qadri Poster Maker</strong><small>{activeProjectName || templateName}</small></div></div>
           <nav className="editor-menu-bar" aria-label="Editor actions">
-            <details id="editor-menu-add" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary title="Add text, images and shapes" onClick={toggleEditorMenu}><span>＋</span>Add</summary>
+            <details id="editor-menu-add" className="editor-menu" open={openEditorMenuId === "editor-menu-add"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Add text, images and shapes" onClick={toggleEditorMenu}><span>＋</span>Object</summary>
               <div className="editor-menu-panel">
                 <button type="button" onClick={addText}>Add Text</button>
                 <button type="button" onClick={() => uploadRef.current?.click()}>{selectedObject?.type === "image" ? "Replace Image" : "Upload Image"}</button>
@@ -3820,9 +3950,15 @@ function deletePage(pageId) {
                 <button type="button" onClick={() => backgroundUploadRef.current?.click()}>Background Image</button>
               </div>
             </details>
-            <details id="editor-menu-edit" className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-edit" className="editor-menu" open={openEditorMenuId === "editor-menu-edit"} onClick={closeEditorMenuAfterAction}>
               <summary title="Edit and duplicate the selected object" onClick={toggleEditorMenu}><span>✎</span>Edit</summary>
               <div className="editor-menu-panel">
+                <button type="button" disabled={!history.length} onClick={undo}>Undo</button>
+                <button type="button" disabled={!redoStack.length} onClick={redo}>Redo</button>
+                <button type="button" disabled={!selectedIds.length} onClick={cutSelected}>Cut</button>
+                <button type="button" disabled={!selectedIds.length} onClick={copySelected}>Copy</button>
+                <button type="button" disabled={!clipboardReady} onClick={pasteObjects}>Paste</button>
+                <button type="button" disabled={!objects.length} onClick={selectAllObjects}>Select All</button>
                 {selectedObject?.type === "image" && <>
                   <button type="button" onClick={beginImageCrop}>Crop Image</button>
                   <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Edit Image / Background Remover</button>
@@ -3835,7 +3971,7 @@ function deletePage(pageId) {
                 }}>Delete Selected</button>
               </div>
             </details>
-            <details id="editor-menu-vector" className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-vector" className="editor-menu" open={openEditorMenuId === "editor-menu-vector"} onClick={closeEditorMenuAfterAction}>
               <summary title="Draw, edit nodes and combine vector shapes" onClick={toggleEditorMenu}><span>⌘</span>Vector</summary>
               <div className="editor-menu-panel editor-menu-panel-wide vector-menu-panel">
                 <div className="vector-tool-row">
@@ -3890,7 +4026,7 @@ function deletePage(pageId) {
                 {vectorMessage && <p className="vector-message" role="status">{vectorMessage}</p>}
               </div>
             </details>
-            <details id="editor-menu-arrange" className="editor-menu" onClick={closeEditorMenuAfterAction}>
+            <details id="editor-menu-arrange" className="editor-menu" open={openEditorMenuId === "editor-menu-arrange"} onClick={closeEditorMenuAfterAction}>
               <summary title="Manage layers, position and alignment" onClick={toggleEditorMenu}><span>↕</span>Arrange</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <label htmlFor="toolbar-canvas-layers">Layers</label>
@@ -3909,6 +4045,15 @@ function deletePage(pageId) {
                   })}
                 </select>
                 {selectedObject?.type === "group" && <button type="button" onClick={() => setExpandedGroupIds((current) => current.includes(selectedObject.id) ? current.filter((id) => id !== selectedObject.id) : [...current, selectedObject.id])}>{expandedGroupIds.includes(selectedObject.id) ? "Collapse group layers" : "Expand group layers"}</button>}
+                <div className="editor-menu-actions">
+                  <button type="button" disabled={selectedIds.length < 2} onClick={groupSelected}>Group</button>
+                  <button type="button" disabled={selectedObject?.type !== "group"} onClick={ungroupSelected}>Ungroup</button>
+                </div>
+                <div className="editor-menu-actions" role="group" aria-label="Arrange alignment">
+                  {[["left", "Align Left"], ["center", "Center"], ["right", "Align Right"], ["top", "Align Top"], ["bottom", "Align Bottom"]].map(([alignment, label]) => (
+                    <button key={alignment} type="button" disabled={!selectedObject || selectedObject.locked || selectedIds.length !== 1} onClick={() => alignSelectedObject(alignment)}>{label}</button>
+                  ))}
+                </div>
                 <div className="editor-menu-actions">
                   <button type="button" disabled={!selectedObject || selectedLayerIndex >= objects.length - 1} onClick={() => moveSelectedLayer(1)}>Bring Forward</button>
                   <button type="button" disabled={!selectedObject || selectedLayerIndex <= 0} onClick={() => moveSelectedLayer(-1)}>Send Backward</button>
@@ -3935,8 +4080,8 @@ function deletePage(pageId) {
                 </>}
               </div>
             </details>
-            <details id="editor-menu-project" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary title="Save projects, pages and templates" onClick={toggleEditorMenu}><span>▣</span>Project</summary>
+            <details id="editor-menu-project" className="editor-menu" open={openEditorMenuId === "editor-menu-project"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Create, open, save and export projects" onClick={toggleEditorMenu}><span>▣</span>File</summary>
               <div className="editor-menu-panel editor-menu-panel-wide">
                 <button type="button" onClick={createNewProject}>New Project</button>
                 <button type="button" onClick={saveProjectFile}>Save</button>
@@ -3964,10 +4109,10 @@ function deletePage(pageId) {
                 ))}
               </div>
             </details>
-            <details id="editor-menu-more" className="editor-menu" onClick={closeEditorMenuAfterAction}>
-              <summary title="More canvas and project tools" onClick={toggleEditorMenu}><span>⋯</span>More</summary>
+            <details id="editor-menu-more" className="editor-menu" open={openEditorMenuId === "editor-menu-more"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Canvas view and editor options" onClick={toggleEditorMenu}><span>◉</span>View</summary>
               <div className="editor-menu-panel">
-                <button type="button" onClick={() => openMobileProperty("background")}>Background & Properties</button>
+                <button type="button" onClick={() => openMobileProperty("background")}>Page Setup</button>
                 {objects.length > 0 && <button type="button" onClick={() => openMobileProperty("arrange")}>Arrange & Layers</button>}
                 {selectedObject && <button type="button" onClick={() => openMobileProperty("selected")}>Selected Object Properties</button>}
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
@@ -3975,8 +4120,44 @@ function deletePage(pageId) {
                 <button type="button" onClick={resetPoster}>Clear / Reset Poster</button>
               </div>
             </details>
+            <details id="editor-menu-text" className="editor-menu editor-menu-desktop-only" open={openEditorMenuId === "editor-menu-text"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Text editing and direction" onClick={toggleEditorMenu}><span>T</span>Text</summary>
+              <div className="editor-menu-panel">
+                {!selectedObject || selectedObject.type !== "text"
+                  ? <button type="button" onClick={addText}>Add Text Object</button>
+                  : <>
+                    <label className="editor-menu-label">Text direction</label>
+                    <div className="editor-menu-actions" role="group" aria-label="Text direction">
+                      {["auto", "ltr", "rtl"].map((direction) => <button key={direction} type="button" className={(selectedObject.direction ?? "auto") === direction ? "is-current" : ""} aria-pressed={(selectedObject.direction ?? "auto") === direction} onClick={() => updateSelectedFromToolbar({ direction })}>{direction.toUpperCase()}</button>)}
+                    </div>
+                    <label className="editor-menu-label">Text alignment</label>
+                    <div className="editor-menu-actions" role="group" aria-label="Text alignment">
+                      {["left", "center", "right"].map((align) => <button key={align} type="button" className={selectedObject.align === align ? "is-current" : ""} aria-pressed={selectedObject.align === align} onClick={() => updateSelectedFromToolbar({ align })}>{align}</button>)}
+                    </div>
+                  </>}
+              </div>
+            </details>
+            <details id="editor-menu-effects" className="editor-menu editor-menu-desktop-only" open={openEditorMenuId === "editor-menu-effects"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Image effects and filters" onClick={toggleEditorMenu}><span>✦</span>Effects</summary>
+              <div className="editor-menu-panel">
+                {selectedObject?.type === "image" ? <>
+                  <label className="editor-menu-label">Image filter preset</label>
+                  <div className="editor-effect-presets">
+                    {Object.entries(IMAGE_FILTER_PRESETS).map(([name, filters]) => <button key={name} type="button" onClick={() => { saveHistory(); updateSelected({ imageFilters: { ...filters } }); }}>{name}</button>)}
+                  </div>
+                  <button type="button" onClick={() => setEditingImageId(selectedObject.id)}>Background Remover</button>
+                </> : <p className="editor-menu-help">Select an image to apply filters or remove its background. Full controls remain in the Properties panel.</p>}
+              </div>
+            </details>
+            <details id="editor-menu-help" className="editor-menu editor-menu-desktop-only" open={openEditorMenuId === "editor-menu-help"} onClick={closeEditorMenuAfterAction}>
+              <summary title="Editor shortcuts and help" onClick={toggleEditorMenu}><span>?</span>Help</summary>
+              <div className="editor-menu-panel editor-menu-panel-wide">
+                <p className="editor-menu-help"><strong>Quick keys</strong><br />Ctrl/Cmd + Z: Undo<br />Ctrl/Cmd + Shift + Z: Redo<br />Delete: Remove selection<br />Esc: Cancel drawing or deselect</p>
+                <p className="editor-menu-help">Use the left toolbox for drawing and selection. Choose an object to edit its properties on the right.</p>
+              </div>
+            </details>
             <button type="button" className="mobile-tools-close" aria-label="Close tool panel" onClick={() => {
-              document.querySelectorAll(".editor-menu[open]").forEach((menu) => { menu.open = false; });
+              setOpenEditorMenuId(null);
             }}>×</button>
           </nav>
           <div className="history-actions" aria-label="Edit history">
@@ -3994,25 +4175,93 @@ function deletePage(pageId) {
           {svgImportNotice && <div className="svg-import-notice" role="status">{svgImportNotice}<button type="button" aria-label="Dismiss SVG import message" onClick={() => setSvgImportNotice("")}>×</button></div>}
         </header>
 
-        <div className="editor-workspace">
+        <div className="editor-command-bar" aria-label="Main toolbar">
+          <div className="editor-command-actions" role="group" aria-label="Project and view commands">
+            <button type="button" title="New project" onClick={createNewProject}><span aria-hidden="true">＋</span><span className="command-label">New</span></button>
+            <button type="button" title="Open project file" onClick={openProjectFile}><span aria-hidden="true">↗</span><span className="command-label">Open</span></button>
+            <button type="button" title="Save project file" onClick={saveProjectFile}><span aria-hidden="true">▣</span><span className="command-label">Save</span></button>
+            <span className="command-divider" />
+            <button type="button" title="Undo" aria-label="Undo" disabled={!history.length && !pathDraft?.length} onClick={undo}><span aria-hidden="true">↶</span><span className="command-label">Undo</span></button>
+            <button type="button" title="Redo" aria-label="Redo" disabled={!redoStack.length} onClick={redo}><span aria-hidden="true">↷</span><span className="command-label">Redo</span></button>
+            <span className="command-divider" />
+            <button type="button" title="Import image" onClick={() => uploadRef.current?.click()}><span aria-hidden="true">▧</span><span className="command-label">Image</span></button>
+            <button type="button" title="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span aria-hidden="true">◇</span><span className="command-label">SVG</span></button>
+            <button type="button" title="Export poster" onClick={() => openExport("png")}><span aria-hidden="true">⇧</span><span className="command-label">Export</span></button>
+            <span className="command-divider" />
+            <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
+            <span className="command-zoom-value">{Math.round(canvasZoom * fittedCanvas.scale * 100)}%</span>
+            <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
+            <button type="button" title="Fit page to workspace" onClick={resetCanvasView}><span aria-hidden="true">▣</span><span className="command-label">Fit</span></button>
+            <button type="button" title="Show document at actual pixel size" onClick={zoomCanvasToActualSize}><span aria-hidden="true">1:1</span><span className="command-label">Actual</span></button>
+            <span className="command-divider" />
+            <button type="button" title="Add a page" onClick={addPage}><span aria-hidden="true">＋▤</span><span className="command-label">Add Page</span></button>
+            <button type="button" className="page-setup-action" title="Document size, units, print resolution, and background" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}><span aria-hidden="true">⚙</span><span className="command-label">Page Setup</span><small>{canvasSize === "Custom" ? `${formatUnitValue(dimensions.width, sizeUnit)} × ${formatUnitValue(dimensions.height, sizeUnit)} ${sizeUnit}` : canvasSize} · {printDpi} DPI</small></button>
+          </div>
+          <div className="editor-context-toolbar" role="group" aria-label="Contextual properties">
+            {selectedObject ? <>
+              <span className="context-object-label">{selectedIds.length > 1 ? `${selectedIds.length} objects` : `${selectedObject.type} selected`}</span>
+              {selectedIds.length === 1 && <>
+                <label title="Horizontal position">X<input aria-label="Selected object X position" type="number" step="0.1" value={selectedObject.x ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ x: Number(event.target.value) || 0 })} /><small>%</small></label>
+                <label title="Vertical position">Y<input aria-label="Selected object Y position" type="number" step="0.1" value={selectedObject.y ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ y: Number(event.target.value) || 0 })} /><small>%</small></label>
+                {selectedObject.width != null && <label title="Object width">W<input aria-label="Selected object width" type="number" min="0.1" step="0.1" value={selectedObject.width} onFocus={saveHistory} onChange={(event) => updateSelected({ width: Math.max(0.1, Number(event.target.value) || 0.1) })} /><small>%</small></label>}
+                {selectedObject.height != null && <label title="Object height">H<input aria-label="Selected object height" type="number" min="0.1" step="0.1" value={selectedObject.height} onFocus={saveHistory} onChange={(event) => updateSelected({ height: Math.max(0.1, Number(event.target.value) || 0.1) })} /><small>%</small></label>}
+                <label title="Rotation">↻<input aria-label="Selected object rotation" type="number" step="1" value={selectedObject.rotation ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ rotation: Number(event.target.value) || 0 })} /><small>°</small></label>
+                <label title="Object opacity">α<input aria-label="Selected object opacity" type="number" min="0" max="100" value={selectedObject.opacity ?? 100} onFocus={saveHistory} onChange={(event) => updateSelected({ opacity: Math.max(0, Math.min(100, Number(event.target.value) || 0)) })} /><small>%</small></label>
+                {selectedObject.type === "text" && <>
+                  <select aria-label="Selected text font" title="Font family" value={selectedObject.fontFamily ?? fontOptions[0].value} onFocus={saveHistory} onChange={(event) => updateSelected({ fontFamily: event.target.value })}>{fontOptions.map((font) => <option key={font.value} value={font.value}>{font.label}</option>)}</select>
+                  <label title="Font size">T<input aria-label="Selected text font size" type="number" min="8" max="200" value={selectedObject.fontSize ?? 36} onFocus={saveHistory} onChange={(event) => updateSelected({ fontSize: Math.max(8, Math.min(200, Number(event.target.value) || 8)) })} /><small>px</small></label>
+                  <button type="button" title="Bold" aria-label="Bold" aria-pressed={Boolean(selectedObject.bold)} className={selectedObject.bold ? "is-current" : ""} onClick={() => updateSelectedFromToolbar({ bold: !selectedObject.bold })}><strong>B</strong></button>
+                  <button type="button" title="Italic" aria-label="Italic" aria-pressed={Boolean(selectedObject.italic)} className={selectedObject.italic ? "is-current" : ""} onClick={() => updateSelectedFromToolbar({ italic: !selectedObject.italic })}><em>I</em></button>
+                  <select aria-label="Selected text alignment" title="Text alignment" value={selectedObject.align ?? "left"} onFocus={saveHistory} onChange={(event) => updateSelected({ align: event.target.value })}><option value="left">Align left</option><option value="center">Align center</option><option value="right">Align right</option></select>
+                  <select aria-label="Selected text direction" title="Text direction" value={selectedObject.direction ?? "auto"} onFocus={saveHistory} onChange={(event) => updateSelected({ direction: event.target.value })}><option value="auto">Auto</option><option value="ltr">LTR</option><option value="rtl">RTL</option></select>
+                  <label title="Text line spacing">↕<input aria-label="Selected text line spacing" type="number" min="0.5" max="3" step="0.05" value={selectedObject.lineHeight ?? 1.25} onFocus={saveHistory} onChange={(event) => updateSelected({ lineHeight: Math.max(0.5, Math.min(3, Number(event.target.value) || 0.5)) })} /><small>Line</small></label>
+                  <label title="Text letter spacing">↔<input aria-label="Selected text letter spacing" type="number" min="-20" max="50" step="0.1" value={selectedObject.letterSpacing ?? 0} onFocus={saveHistory} onChange={(event) => updateSelected({ letterSpacing: Math.max(-20, Math.min(50, Number(event.target.value) || 0)) })} /><small>px</small></label>
+                </>}
+                {selectedObject.color && <label className="context-color" title="Object fill color"><span aria-hidden="true">◐</span><input type="color" aria-label="Selected object color" value={selectedObject.color} onFocus={saveHistory} onChange={(event) => updateSelected({ color: event.target.value })} /></label>}
+                {selectedObject.type === "image" && <>
+                  <button type="button" title="Crop selected image" onClick={beginImageCrop}>Crop</button>
+                  <button type="button" title="Remove selected image background" onClick={() => setEditingImageId(selectedObject.id)}>Remove BG</button>
+                </>}
+                <button type="button" className="context-delete-action" title="Delete selected object" onClick={deleteSelectedObjects}>Delete</button>
+              </>}
+              {selectedIds.length > 1 && <>
+                <button type="button" title="Group selected objects" onClick={groupSelected}>Group</button>
+                <button type="button" title="Delete selected objects" onClick={deleteSelectedObjects}>Delete</button>
+              </>}
+            </> : <span className="context-empty">{activeTool === "select" ? "Select an object to edit its properties" : `Active tool: ${activeTool}`}</span>}
+            <button type="button" className="properties-collapse-toggle" title={desktopPropertiesCollapsed ? "Show right properties panel" : "Hide right properties panel"} aria-label={desktopPropertiesCollapsed ? "Show properties panel" : "Hide properties panel"} aria-pressed={!desktopPropertiesCollapsed} onClick={() => setDesktopPropertiesCollapsed((collapsed) => !collapsed)}>{desktopPropertiesCollapsed ? "▤" : "▥"}</button>
+          </div>
+        </div>
+
+        <div className={`editor-workspace${desktopPropertiesCollapsed ? " is-properties-collapsed" : ""}`}>
+          <aside className="editor-toolbox" aria-label="Drawing and editing tools">
+            <span className="toolbox-section-label">SELECT</span>
+            <button type="button" className={activeTool === "select" ? "is-current" : ""} title="Pick / Select (V)" aria-label="Pick / Select tool" aria-pressed={activeTool === "select"} onClick={() => { setActiveTool("select"); changePathDraft(null); }}><span>↖</span></button>
+            <button type="button" className={activeTool === "multi" ? "is-current" : ""} title="Multi-select (Shift)" aria-label="Multi-select tool" aria-pressed={activeTool === "multi"} onClick={() => { setActiveTool("multi"); changePathDraft(null); }}><span>⌖</span></button>
+            <button type="button" className={activeTool === "node" ? "is-current" : ""} title="Shape / Node edit" aria-label="Shape node editing tool" aria-pressed={activeTool === "node"} disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}><span>◇</span></button>
+            <button type="button" title="Crop selected image" aria-label="Crop selected image" disabled={selectedObject?.type !== "image"} onClick={beginImageCrop}><span>◩</span></button>
+            <span className="toolbox-divider" />
+            <span className="toolbox-section-label">DRAW</span>
+            <button type="button" title="Add text" aria-label="Add text" onClick={addText}><span>T</span></button>
+            <button type="button" title="Add shape" aria-label="Add shape" onClick={() => setShapePickerOpen(true)}><span>□</span></button>
+            <button type="button" className={activeTool === "pen" ? "is-current" : ""} title="Pen / Bezier" aria-label="Pen tool" aria-pressed={activeTool === "pen"} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}><span>⌁</span></button>
+            <button type="button" className={activeTool === "freehand" ? "is-current" : ""} title="Freehand drawing" aria-label="Freehand tool" aria-pressed={activeTool === "freehand"} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}><span>〰</span></button>
+            <button type="button" title="Import image" aria-label="Import image" onClick={() => uploadRef.current?.click()}><span>▧</span></button>
+            <button type="button" title="Import editable SVG" aria-label="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span>◇</span></button>
+            <button type="button" title="Background remover" aria-label="Remove image background" disabled={selectedObject?.type !== "image"} onClick={() => setEditingImageId(selectedObject.id)}><span>✧</span></button>
+            <label className="toolbox-color" title="Set selected object or drawing color"><span>◐</span><input type="color" aria-label="Selected object or drawing color" value={selectedObject?.color ?? vectorFill} onFocus={() => selectedObject && saveHistory()} onChange={(event) => selectedObject ? updateSelected({ color: event.target.value }) : setVectorFill(event.target.value)} /></label>
+            <span className="toolbox-divider" />
+            <span className="toolbox-section-label">VIEW</span>
+            <button type="button" className={activeTool === "pan" ? "is-current" : ""} title="Pan canvas" aria-label="Pan tool" aria-pressed={activeTool === "pan"} onClick={() => setActiveTool(activeTool === "pan" ? "select" : "pan")}><span>✋</span></button>
+            <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeCanvasZoom(1.2)}><span>＋</span></button>
+            <button type="button" title="Fit page" aria-label="Fit page to workspace" onClick={resetCanvasView}><span>⊡</span></button>
+          </aside>
           <main className="editor-stage">
-            <div className="stage-heading"><div><span>YOUR CANVAS</span><h1>{templateName}</h1></div>
-              <div className="size-picker desktop-size-picker">
-                <label htmlFor="desktop-canvas-size">Canvas size<select id="desktop-canvas-size" value={canvasSize} onChange={(event) => setCanvasSize(event.target.value)}>
-                  {Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option>
-                </select></label>
-                <label htmlFor="desktop-canvas-unit">Units<select id="desktop-canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option></select></label>
-                {canvasSize === "Custom" && <div className="custom-size-fields"><label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
-                {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}
-                {canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
-                <label htmlFor="desktop-print-dpi">Print resolution<select id="desktop-print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
-                <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span><small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>{dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
-              </div>
-              <button type="button" className="document-size-trigger" onClick={() => setDocumentSizeOpen(true)}>▱ <span>Size</span><small>{canvasSize}</small></button>
+            <div className="stage-heading"><div><span>YOUR CANVAS</span><h1>{templateName}</h1></div><button type="button" className="document-size-trigger" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}>▱ <span>Page Setup</span><small>{canvasSize} · {printDpi} DPI</small></button>
             </div>
             <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
               <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
-              <span>{Math.round(canvasZoom * 100)}%</span>
+              <span>{Math.round(canvasZoom * fittedCanvas.scale * 100)}%</span>
               <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
               <button type="button" onClick={resetCanvasView}>Fit</button>
             </div>
@@ -4037,44 +4286,8 @@ function deletePage(pageId) {
           {mobilePropertiesOpen && <button type="button" className="mobile-properties-backdrop" aria-label="Close properties" onClick={closeMobileProperties} />}
           <aside className={`properties-panel${mobilePropertiesOpen ? " is-mobile-open" : ""}`} onClick={togglePropertyAccordion}>
             <button type="button" className="mobile-properties-close" aria-label="Close properties" onClick={closeMobileProperties}>×</button>
-            <h2>{selectedObject ? `${selectedObject.type === "text" ? "Text" : selectedObject.type === "image" ? "Image" : selectedObject.type === "group" ? "Group" : "Shape"} Properties` : "Design & Background"}</h2>
+            <h2>{selectedObject ? `${selectedObject.type === "text" ? "Text" : selectedObject.type === "image" ? "Image" : selectedObject.type === "group" ? "Group" : "Shape"} Properties` : "Properties & Layers"}</h2>
             <p className="panel-hint">{selectedIds.length > 1 ? `${selectedIds.length} objects selected.` : "Select an element on your canvas to edit it."}</p>
-            <details
-              className="text-section background-properties"
-              open={backgroundPanelOpen}
-              onToggle={(event) => setBackgroundPanelOpen(event.currentTarget.open)}
-            >
-              <summary>Background</summary>
-              <label className="field-label" htmlFor="background-mode">Type</label>
-              <select id="background-mode" className="font-select" value={backgroundMode} onChange={(event) => setBackgroundMode(event.target.value)}>
-                <option value="solid">Solid Color</option>
-                <option value="gradient">Gradient</option>
-                <option value="upload">Upload Image</option>
-                <option value="islamic">Islamic Backgrounds</option>
-              </select>
-              {backgroundMode === "solid" && <>
-                <label className="field-label color-label">Background color<input aria-label="Background color picker" type="color" value={background} onChange={(event) => setBackground(event.target.value)} /></label>
-                <label className="field-label" htmlFor="background-hex">HEX</label>
-                <input id="background-hex" className="hex-input" type="text" value={background} maxLength="7" pattern="^#[0-9a-fA-F]{6}$" onChange={(event) => { if (/^#[0-9a-fA-F]{6}$/.test(event.target.value)) setBackground(event.target.value); }} />
-              </>}
-              {backgroundMode === "gradient" && <>
-                {[0, 1].map((index) => <label key={index} className="field-label color-label">Color {index + 1}<input aria-label={`Background gradient color ${index + 1}`} type="color" value={backgroundGradientColors[index]} onChange={(event) => setBackgroundGradientColors((current) => current.map((color, colorIndex) => colorIndex === index ? event.target.value : color))} /></label>)}
-                <label className="effect-toggle"><input type="checkbox" checked={backgroundGradientThirdEnabled} onChange={(event) => setBackgroundGradientThirdEnabled(event.target.checked)} />Use Color 3</label>
-                {backgroundGradientThirdEnabled && <label className="field-label color-label">Color 3<input aria-label="Background gradient color 3" type="color" value={backgroundGradientColors[2]} onChange={(event) => setBackgroundGradientColors((current) => current.map((color, index) => index === 2 ? event.target.value : color))} /></label>}
-                <label className="field-label" htmlFor="background-gradient-angle">Gradient angle <span>{backgroundGradientAngle}°</span></label>
-                <input id="background-gradient-angle" className="size-range" type="range" min="-180" max="180" value={backgroundGradientAngle} onChange={(event) => setBackgroundGradientAngle(Number(event.target.value))} />
-                <div className="field-label">Quick gradients</div>
-                <div className="background-gradient-grid">{backgroundGradientPresets.map((preset) => <button key={preset.label} type="button" aria-label={`Apply ${preset.label} background gradient`} style={{ backgroundImage: getCssBackgroundGradient(preset.colors, 35) }} onClick={() => { setBackgroundGradientColors([preset.colors[0], preset.colors[1], preset.colors[2] ?? preset.colors[1]]); setBackgroundGradientThirdEnabled(preset.colors.length > 2); setBackgroundGradientAngle(35); }}><span>{preset.label}</span></button>)}</div>
-              </>}
-              {backgroundMode === "upload" && <button className="background-upload-btn" type="button" onClick={() => backgroundUploadRef.current?.click()}>{backgroundImage ? "Replace Background Image" : "Upload Background Image"}</button>}
-              {backgroundMode === "islamic" && <div className="islamic-background-grid">{islamicBackgrounds.map((design) => <button key={design.id} type="button" className={`islamic-background-card${selectedIslamicBackgroundId === design.id ? " is-selected" : ""}`} aria-pressed={selectedIslamicBackgroundId === design.id} aria-label={`Apply ${design.label} background`} style={{ backgroundImage: `url("${getIslamicBackgroundSvg(design)}")` }} onClick={() => { setSelectedIslamicBackgroundId(design.id); setBackgroundMode("islamic"); }}><span>{design.label}</span></button>)}</div>}
-              {backgroundMode !== "solid" && <>
-                <label className="effect-toggle"><input type="checkbox" checked={backgroundOverlayEnabled} onChange={(event) => setBackgroundOverlayEnabled(event.target.checked)} />Dark overlay</label>
-                {backgroundOverlayEnabled && <label className="field-label" htmlFor="background-overlay-opacity">Overlay opacity <span>{backgroundOverlayOpacity}%</span></label>}
-                {backgroundOverlayEnabled && <input id="background-overlay-opacity" className="size-range" type="range" min="0" max="80" value={backgroundOverlayOpacity} onChange={(event) => setBackgroundOverlayOpacity(Number(event.target.value))} />}
-              </>}
-              <button className="reset-background-btn" type="button" onClick={resetBackground}>Reset Background</button>
-            </details>
             {objects.length > 0 && <details className="text-section">
               <summary>Arrange & Layers</summary>
               <label className="field-label" htmlFor="canvas-layers">Canvas layers</label>
@@ -4450,16 +4663,55 @@ function deletePage(pageId) {
         </div>
         {documentSizeOpen && <div className="document-size-backdrop" role="presentation">
           <section className="document-size-dialog" role="dialog" aria-modal="true" aria-labelledby="document-size-title">
-            <header className="document-size-header"><div><span>NEW POSTER</span><h2 id="document-size-title">Choose document size</h2></div><button type="button" aria-label="Close document size settings" onClick={() => setDocumentSizeOpen(false)}>×</button></header>
+            <header className="document-size-header"><div><span>DOCUMENT</span><h2 id="document-size-title">Page Setup</h2><p>Page size, print resolution, units, and background</p></div><button type="button" aria-label="Close Page Setup" onClick={closePageSetup}>×</button></header>
             <div className="size-picker mobile-size-picker">
-              <label htmlFor="mobile-canvas-size">Canvas size<select id="mobile-canvas-size" value={canvasSize} onChange={(event) => { setCanvasSize(event.target.value); if (event.target.value !== "Custom") setDocumentSizeOpen(false); }}>{Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option></select></label>
+              <label htmlFor="mobile-canvas-size">Canvas size<select id="mobile-canvas-size" value={canvasSize} onChange={(event) => { setCanvasSize(event.target.value); if (window.matchMedia(COMPACT_EDITOR_QUERY).matches && event.target.value !== "Custom") setDocumentSizeOpen(false); }}>{Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option></select></label>
               <label htmlFor="mobile-canvas-unit">Units<select id="mobile-canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option></select></label>
               {canvasSize === "Custom" && <div className="custom-size-fields"><label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
               {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}{canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
               <label htmlFor="mobile-print-dpi">Print resolution<select id="mobile-print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
               <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span><small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>{dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
             </div>
-            <footer className="document-size-footer"><button type="button" onClick={() => setDocumentSizeOpen(false)}>Use this size</button></footer>
+            <section className="page-setup-background">
+            <details
+              className="text-section background-properties"
+              open={backgroundPanelOpen}
+              onToggle={(event) => setBackgroundPanelOpen(event.currentTarget.open)}
+            >
+              <summary>Background</summary>
+              <label className="field-label" htmlFor="background-mode">Type</label>
+              <select id="background-mode" className="font-select" value={backgroundMode} onChange={(event) => setBackgroundMode(event.target.value)}>
+                <option value="solid">Solid Color</option>
+                <option value="gradient">Gradient</option>
+                <option value="upload">Upload Image</option>
+                <option value="islamic">Islamic Backgrounds</option>
+              </select>
+              {backgroundMode === "solid" && <>
+                <label className="field-label color-label">Background color<input aria-label="Background color picker" type="color" value={background} onChange={(event) => setBackground(event.target.value)} /></label>
+                <label className="field-label" htmlFor="background-hex">HEX</label>
+                <input id="background-hex" className="hex-input" type="text" value={background} maxLength="7" pattern="^#[0-9a-fA-F]{6}$" onChange={(event) => { if (/^#[0-9a-fA-F]{6}$/.test(event.target.value)) setBackground(event.target.value); }} />
+              </>}
+              {backgroundMode === "gradient" && <>
+                {[0, 1].map((index) => <label key={index} className="field-label color-label">Color {index + 1}<input aria-label={`Background gradient color ${index + 1}`} type="color" value={backgroundGradientColors[index]} onChange={(event) => setBackgroundGradientColors((current) => current.map((color, colorIndex) => colorIndex === index ? event.target.value : color))} /></label>)}
+                <label className="effect-toggle"><input type="checkbox" checked={backgroundGradientThirdEnabled} onChange={(event) => setBackgroundGradientThirdEnabled(event.target.checked)} />Use Color 3</label>
+                {backgroundGradientThirdEnabled && <label className="field-label color-label">Color 3<input aria-label="Background gradient color 3" type="color" value={backgroundGradientColors[2]} onChange={(event) => setBackgroundGradientColors((current) => current.map((color, index) => index === 2 ? event.target.value : color))} /></label>}
+                <label className="field-label" htmlFor="background-gradient-angle">Gradient angle <span>{backgroundGradientAngle}°</span></label>
+                <input id="background-gradient-angle" className="size-range" type="range" min="-180" max="180" value={backgroundGradientAngle} onChange={(event) => setBackgroundGradientAngle(Number(event.target.value))} />
+                <div className="field-label">Quick gradients</div>
+                <div className="background-gradient-grid">{backgroundGradientPresets.map((preset) => <button key={preset.label} type="button" aria-label={`Apply ${preset.label} background gradient`} style={{ backgroundImage: getCssBackgroundGradient(preset.colors, 35) }} onClick={() => { setBackgroundGradientColors([preset.colors[0], preset.colors[1], preset.colors[2] ?? preset.colors[1]]); setBackgroundGradientThirdEnabled(preset.colors.length > 2); setBackgroundGradientAngle(35); }}><span>{preset.label}</span></button>)}</div>
+              </>}
+              {backgroundMode === "upload" && <button className="background-upload-btn" type="button" onClick={() => backgroundUploadRef.current?.click()}>{backgroundImage ? "Replace Background Image" : "Upload Background Image"}</button>}
+              {backgroundMode === "islamic" && <div className="islamic-background-grid">{islamicBackgrounds.map((design) => <button key={design.id} type="button" className={`islamic-background-card${selectedIslamicBackgroundId === design.id ? " is-selected" : ""}`} aria-pressed={selectedIslamicBackgroundId === design.id} aria-label={`Apply ${design.label} background`} style={{ backgroundImage: `url("${getIslamicBackgroundSvg(design)}")` }} onClick={() => { setSelectedIslamicBackgroundId(design.id); setBackgroundMode("islamic"); }}><span>{design.label}</span></button>)}</div>}
+              {backgroundMode !== "solid" && <>
+                <label className="effect-toggle"><input type="checkbox" checked={backgroundOverlayEnabled} onChange={(event) => setBackgroundOverlayEnabled(event.target.checked)} />Dark overlay</label>
+                {backgroundOverlayEnabled && <label className="field-label" htmlFor="background-overlay-opacity">Overlay opacity <span>{backgroundOverlayOpacity}%</span></label>}
+                {backgroundOverlayEnabled && <input id="background-overlay-opacity" className="size-range" type="range" min="0" max="80" value={backgroundOverlayOpacity} onChange={(event) => setBackgroundOverlayOpacity(Number(event.target.value))} />}
+              </>}
+              <button className="reset-background-btn" type="button" onClick={resetBackground}>Reset Background</button>
+            </details>
+
+            </section>
+            <footer className="document-size-footer"><button type="button" onClick={closePageSetup}>Apply & Close</button></footer>
           </section>
         </div>}
         {shapePickerOpen && <div className="shape-picker-backdrop" onClick={() => setShapePickerOpen(false)}>
