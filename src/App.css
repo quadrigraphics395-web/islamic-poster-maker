@@ -1524,11 +1524,91 @@ footer {
 }
 
 .canvas-wrap {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.page-ruler-layer {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.page-ruler-horizontal,
+.page-ruler-vertical {
+  position: absolute;
+  color: #465b4d;
+  font: 600 8px/1 Arial, sans-serif;
+}
+
+.page-ruler-horizontal {
+  top: -22px;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  border-bottom: 1px solid #829184;
+}
+
+.page-ruler-vertical {
+  top: 0;
+  left: -34px;
+  width: 30px;
+  height: 100%;
+  border-right: 1px solid #829184;
+}
+
+.page-ruler-tick {
+  position: absolute;
+  display: block;
+  transform: scale(var(--inverse-canvas-zoom, 1));
+  transform-origin: center;
+  white-space: nowrap;
+}
+
+.page-ruler-tick--horizontal {
+  top: 0;
+}
+
+.page-ruler-tick--horizontal i {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  width: 1px;
+  height: 5px;
+  background: #829184;
+}
+
+.page-ruler-tick--horizontal b {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: inherit;
+}
+
+.page-ruler-tick--vertical {
+  left: 0;
+}
+
+.page-ruler-tick--vertical i {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 1px;
+  background: #829184;
+}
+
+.page-ruler-tick--vertical b {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-weight: inherit;
 }
 
 .poster-canvas {
@@ -1610,7 +1690,7 @@ footer {
 
 .canvas-control-object.is-selected {
   outline: 1px solid #d5ad62;
-  outline-offset: 5px;
+  outline-offset: 0;
 }
 
 .canvas-object-content {
@@ -1684,15 +1764,29 @@ footer {
 .resize-handle {
   position: absolute;
   z-index: 3;
+  width: 88px;
+  height: 88px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: nwse-resize;
+  touch-action: none;
+  transform: scale(var(--inverse-canvas-zoom, 1));
+  transform-origin: center;
+}
+
+.resize-handle-visual {
+  position: absolute;
   width: 12px;
   height: 12px;
-  padding: 0;
   border: 2px solid #ffffff;
   border-radius: 2px;
   background: #d5ad62;
   box-shadow: 0 0 0 1px #684a14;
-  cursor: nwse-resize;
-  touch-action: none;
+  box-sizing: border-box;
+  pointer-events: none;
 }
 
 .object-flip-actions {
@@ -1733,23 +1827,51 @@ footer {
 }
 
 .resize-handle--top-left {
-  top: -11px;
-  left: -11px;
+  top: -44px;
+  left: -44px;
+  clip-path: polygon(0 0, 50% 0, 50% 50%, 0 50%);
+}
+
+.resize-handle--top-left .resize-handle-visual {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .resize-handle--top-right {
-  top: -11px;
-  right: -11px;
+  top: -44px;
+  right: -44px;
+  clip-path: polygon(50% 0, 100% 0, 100% 50%, 50% 50%);
+}
+
+.resize-handle--top-right .resize-handle-visual {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .resize-handle--bottom-left {
-  bottom: -11px;
-  left: -11px;
+  bottom: -44px;
+  left: -44px;
+  clip-path: polygon(0 50%, 50% 50%, 50% 100%, 0 100%);
+}
+
+.resize-handle--bottom-left .resize-handle-visual {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .resize-handle--bottom-right {
-  right: -11px;
-  bottom: -11px;
+  right: -44px;
+  bottom: -44px;
+  clip-path: polygon(50% 50%, 100% 50%, 100% 100%, 50% 100%);
+}
+
+.resize-handle--bottom-right .resize-handle-visual {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .canvas-caption {
@@ -2299,7 +2421,8 @@ footer {
 .group-selection-outline {
   position: absolute;
   z-index: 4;
-  inset: -5px;
+  inset: 0;
+  box-sizing: border-box;
   border: 1px dashed #176b4d;
   pointer-events: none;
 }
@@ -2717,31 +2840,6 @@ footer {
 }
 
 @media (max-width: 600px) {
-  .resize-handle {
-    width: 20px;
-    height: 20px;
-  }
-
-  .resize-handle--top-left {
-    top: -15px;
-    left: -15px;
-  }
-
-  .resize-handle--top-right {
-    top: -15px;
-    right: -15px;
-  }
-
-  .resize-handle--bottom-left {
-    bottom: -15px;
-    left: -15px;
-  }
-
-  .resize-handle--bottom-right {
-    right: -15px;
-    bottom: -15px;
-  }
-
   .editor-topbar {
     min-height: 0;
     flex-wrap: wrap;

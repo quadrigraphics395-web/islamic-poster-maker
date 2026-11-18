@@ -9,6 +9,7 @@ import TemplateGallery from "./components/TemplateGallery.jsx";
 import TemplateManager from "./components/TemplateManager.jsx";
 import TemplateSaveDialog from "./components/TemplateSaveDialog.jsx";
 import { resizeObjectFromCorner } from "./utils/objectGeometry.js";
+import { clientPointToCanvas } from "./utils/canvasCoordinates.js";
 import { createProjectRecord, readProjects, writeProjects } from "./utils/projectStorage.js";
 import { createTemplateRecord, deleteTemplate, readTemplates, writeTemplate } from "./utils/templateStorage.js";
 import svgPathParser from "svg-path-parser";
@@ -20,7 +21,7 @@ import { deletePersonalFont, listPersonalFonts, preparePersonalFont, savePersona
 import { removeObjectsById, transformEffectOffset } from "./utils/objectOperations.js";
 import { adminSignIn, adminSignOut, checkAdminSession, cleanupOnlineAssets, deleteOnlineTemplate, getOnlineTemplate, listOnlineTemplates, onlineTemplatesConfigured, saveOnlineTemplate, updateOnlineTemplate } from "./utils/onlineTemplates.js";
 import { cropRectToSource, getCroppedImageAspectRatio, normalizeCropRect } from "./utils/imageCrop.js";
-import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackgroundMode, getJpegQuality, getPrintExportDimensions, getPresetPhysicalSize, readProjectDocumentMeta, toCssPixels } from "./utils/documentUnits.js";
+import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, createRulerTicks, formatUnitValue, getExportBackgroundMode, getJpegQuality, getPrintExportDimensions, getPresetPhysicalSize, readProjectDocumentMeta, toCssPixels } from "./utils/documentUnits.js";
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
@@ -670,11 +671,11 @@ function ShapeArtwork({ shape, color, className }) {
 }
 
 function App() {
-  const [editor, setEditor] = useState(false);
-  const [canvasSize, setCanvasSize] = useState("Square 1080x1080");
-  const [customWidth, setCustomWidth] = useState(1080);
-  const [customHeight, setCustomHeight] = useState(1080);
-  const [sizeUnit, setSizeUnit] = useState("px");
+  const [editor, setEditor] = useState(true);
+  const [canvasSize, setCanvasSize] = useState("A4 Portrait");
+  const [customWidth, setCustomWidth] = useState(canvasSizes["A4 Portrait"].width);
+  const [customHeight, setCustomHeight] = useState(canvasSizes["A4 Portrait"].height);
+  const [sizeUnit, setSizeUnit] = useState("mm");
   const [printDpi, setPrintDpi] = useState(DEFAULT_PRINT_DPI);
   const [dimensionError, setDimensionError] = useState("");
   const [background, setBackground] = useState("#17352c");
@@ -979,6 +980,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const dimensions = canvasSize === "Custom"
     ? { width: customWidth, height: customHeight }
     : canvasSizes[canvasSize];
+  const pageOrientation = dimensions.width === dimensions.height ? "square" : dimensions.width > dimensions.height ? "landscape" : "portrait";
   const selectedObjects = objects.filter((object) => selectedIds.includes(object.id));
   const selectedVectorOperationEnabled = selectedObjects.length >= 2
     && selectedObjects.every((object) => object.type === "shape" && Boolean(objectPolygonGeometry(object)?.length));
@@ -991,6 +993,9 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     && Boolean(objectPolygonGeometry(selectedObjects[0])?.length > 1);
   const presetPhysicalSize = canvasSize === "Custom" ? null : getPresetPhysicalSize(canvasSizes[canvasSize]);
   const physicalSize = presetPhysicalSize ?? { widthIn: dimensions.width / CSS_PIXELS_PER_INCH, heightIn: dimensions.height / CSS_PIXELS_PER_INCH };
+  const pageSizeSummary = `${formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × ${formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} ${sizeUnit}`;
+  const pageRulerXTicks = createRulerTicks(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit);
+  const pageRulerYTicks = createRulerTicks(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit);
   const previewExportDimensions = getPrintExportDimensions(dimensions.width, dimensions.height, printDpi);
   const projectSnapshot = useMemo(() => JSON.stringify(captureProject()), [
     canvasSize, customWidth, customHeight, sizeUnit, printDpi, background, backgroundMode, backgroundImage,
@@ -1560,9 +1565,9 @@ function deletePage(pageId) {
 }
 
   function resetPoster() {
-    setCanvasSize("Instagram Post 1080x1080");
-    setCustomWidth(1080);
-    setCustomHeight(1080);
+    setCanvasSize("A4 Portrait");
+    setCustomWidth(canvasSizes["A4 Portrait"].width);
+    setCustomHeight(canvasSizes["A4 Portrait"].height);
     setBackground("#ffffff");
     setBackgroundMode("solid");
     setBackgroundImage(null);
@@ -1591,7 +1596,7 @@ function deletePage(pageId) {
   function resetProjectState() {
     projectExtrasRef.current = {};
     resetPoster();
-    setSizeUnit("px");
+    setSizeUnit("mm");
     setPrintDpi(DEFAULT_PRINT_DPI);
     setDimensionError("");
     setCanvasViewOffset({ x: 0, y: 0 });
@@ -1753,6 +1758,40 @@ function deletePage(pageId) {
     setDimensionError("");
     if (axis === "width") setCustomWidth(pixels);
     else setCustomHeight(pixels);
+  }
+
+  function changeCanvasSize(nextSize) {
+    if (nextSize === "Custom" && canvasSize !== "Custom") {
+      setCustomWidth(physicalSize.widthIn * CSS_PIXELS_PER_INCH);
+      setCustomHeight(physicalSize.heightIn * CSS_PIXELS_PER_INCH);
+    }
+    setCanvasSize(nextSize);
+    setDimensionError("");
+  }
+
+  function updatePageOrientation(orientation) {
+    if (orientation === "square") {
+      setCanvasSize("Instagram Post 1080x1080");
+      setCustomWidth(1080);
+      setCustomHeight(1080);
+      setDimensionError("");
+      return;
+    }
+    if (pageOrientation === orientation) return;
+    const pairedPresets = {
+      "A4 Portrait": "A4 Landscape",
+      "A4 Landscape": "A4 Portrait",
+      "A3 Portrait": "A3 Landscape",
+      "A3 Landscape": "A3 Portrait",
+    };
+    if (pairedPresets[canvasSize]) {
+      setCanvasSize(pairedPresets[canvasSize]);
+    } else {
+      setCanvasSize("Custom");
+      setCustomWidth(dimensions.height);
+      setCustomHeight(dimensions.width);
+    }
+    setDimensionError("");
   }
 
  async function importPersonalFont(event) {
@@ -3413,32 +3452,21 @@ function deletePage(pageId) {
 
     const objectElement = event.currentTarget.closest(".canvas-object");
     const oppositeHandle = objectElement?.querySelector(`[data-resize-corner="${corner.opposite}"]`);
-    if (!objectElement || !oppositeHandle) return;
+    const canvas = canvasRef.current;
+    if (!objectElement || !oppositeHandle || !canvas) return;
 
     const objectBounds = objectElement.getBoundingClientRect();
-    const canvasBounds = canvasRef.current.getBoundingClientRect();
-    const objectCenterX = objectBounds.left + objectBounds.width / 2;
-    const objectCenterY = objectBounds.top + objectBounds.height / 2;
+    const canvasBounds = canvas.getBoundingClientRect();
+    const objectCenter = clientPointToCanvas(objectBounds.left + objectBounds.width / 2, objectBounds.top + objectBounds.height / 2, canvasBounds, canvasZoom);
+    const startPointer = clientPointToCanvas(event.clientX, event.clientY, canvasBounds, canvasZoom);
+    if (!objectCenter || !startPointer) return;
     const isVectorShape = object.type === "shape" && (object.shape === "custom" || primitiveVectorShapes.includes(object.shape) || islamicShapes.some((shape) => shape.id === object.shape));
     const isShape = object.type === "shape";
     const shapeWidth = objectElement.offsetWidth;
     const shapeHeight = objectElement.offsetHeight;
-    const cornerSigns = {
-      "top-left": { x: -1, y: -1 },
-      "top-right": { x: 1, y: -1 },
-      "bottom-left": { x: -1, y: 1 },
-      "bottom-right": { x: 1, y: 1 },
-    }[corner.id];
-    const radians = ((object.rotation ?? 0) * Math.PI) / 180;
-    const anchorOffsetX = (-cornerSigns.x * shapeWidth / 2) * Math.cos(radians)
-      - (-cornerSigns.y * shapeHeight / 2) * Math.sin(radians);
-    const anchorOffsetY = (-cornerSigns.x * shapeWidth / 2) * Math.sin(radians)
-      + (-cornerSigns.y * shapeHeight / 2) * Math.cos(radians);
-    const shapeAnchorX = objectCenterX + anchorOffsetX;
-    const shapeAnchorY = objectCenterY + anchorOffsetY;
     const oppositeBounds = oppositeHandle.getBoundingClientRect();
-    const anchorX = isShape ? shapeAnchorX : oppositeBounds.left + oppositeBounds.width / 2;
-    const anchorY = isShape ? shapeAnchorY : oppositeBounds.top + oppositeBounds.height / 2;
+    const anchor = clientPointToCanvas(oppositeBounds.left + oppositeBounds.width / 2, oppositeBounds.top + oppositeBounds.height / 2, canvasBounds, canvasZoom);
+    if (!anchor) return;
 
     if (isShape) {
       saveHistory();
@@ -3446,38 +3474,44 @@ function deletePage(pageId) {
       dragRef.current = {
         type: "resize-shape",
         id: object.id,
+        pointerId: event.pointerId,
+        coordinateZoom: canvasZoom,
         corner: corner.id,
         rotation: object.rotation ?? 0,
-        anchorX: anchorX - canvasBounds.left,
-        anchorY: anchorY - canvasBounds.top,
-        startPointerX: event.clientX - canvasBounds.left,
-        startPointerY: event.clientY - canvasBounds.top,
+        anchorX: anchor.x,
+        anchorY: anchor.y,
+        startPointerX: startPointer.x,
+        startPointerY: startPointer.y,
         startWidth: shapeWidth,
         startHeight: shapeHeight,
         propertyWidth: object.width ?? (isVectorShape ? 38 : 140),
         propertyHeight: object.height ?? (isVectorShape ? 38 : 16),
-        widthUnit: isVectorShape ? canvasBounds.width / 100 : 1,
-        heightUnit: isVectorShape ? canvasBounds.height / 100 : 1,
-        positionWidthUnit: canvasBounds.width / 100,
-        positionHeightUnit: canvasBounds.height / 100,
+        widthUnit: isVectorShape ? canvas.clientWidth / 100 : 1,
+        heightUnit: isVectorShape ? canvas.clientHeight / 100 : 1,
+        positionWidthUnit: canvas.clientWidth / 100,
+        positionHeightUnit: canvas.clientHeight / 100,
         lockAspectRatio: object.keepAspectRatio ?? proportionalShapeIds.has(object.shape),
       };
       selectObject(object.id);
       return;
     }
 
-    const pointerVectorX = event.clientX - anchorX;
-    const pointerVectorY = event.clientY - anchorY;
+    const pointerVectorX = startPointer.x - anchor.x;
+    const pointerVectorY = startPointer.y - anchor.y;
 
     event.currentTarget.setPointerCapture(event.pointerId);
     saveHistory();
     dragRef.current = {
       type: "resize",
       id: object.id,
-      anchorX,
-      anchorY,
-      startCenterX: objectCenterX,
-      startCenterY: objectCenterY,
+      pointerId: event.pointerId,
+      coordinateZoom: canvasZoom,
+      canvasWidth: canvas.clientWidth,
+      canvasHeight: canvas.clientHeight,
+      anchorX: anchor.x,
+      anchorY: anchor.y,
+      startCenterX: objectCenter.x,
+      startCenterY: objectCenter.y,
       startVectorX: pointerVectorX,
       startVectorY: pointerVectorY,
       startVectorLengthSquared: pointerVectorX ** 2 + pointerVectorY ** 2,
@@ -3494,32 +3528,34 @@ function deletePage(pageId) {
     if (group.locked || event.button !== 0) return;
     const element = event.currentTarget.closest(".canvas-object");
     const opposite = event.currentTarget.closest(".group-selection-outline")?.querySelector(`[data-resize-corner="${corner.opposite}"]`);
-    const canvasBounds = canvasRef.current.getBoundingClientRect();
-    if (!element || !opposite) return;
+    const canvas = canvasRef.current;
+    const canvasBounds = canvas?.getBoundingClientRect();
+    if (!element || !opposite || !canvasBounds || !canvas) return;
     const oppositeBounds = opposite.getBoundingClientRect();
-    const oppositeCenter = {
-      x: oppositeBounds.left + oppositeBounds.width / 2,
-      y: oppositeBounds.top + oppositeBounds.height / 2,
-    };
+    const oppositeCenter = clientPointToCanvas(oppositeBounds.left + oppositeBounds.width / 2, oppositeBounds.top + oppositeBounds.height / 2, canvasBounds, canvasZoom);
+    const startPointer = clientPointToCanvas(event.clientX, event.clientY, canvasBounds, canvasZoom);
+    if (!oppositeCenter || !startPointer) return;
     saveHistory();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       type: "resize-shape",
       id: group.id,
+      pointerId: event.pointerId,
+      coordinateZoom: canvasZoom,
       corner: corner.id,
       rotation: group.rotation ?? 0,
-      anchorX: oppositeCenter.x - canvasBounds.left,
-      anchorY: oppositeCenter.y - canvasBounds.top,
-      startPointerX: event.clientX - canvasBounds.left,
-      startPointerY: event.clientY - canvasBounds.top,
+      anchorX: oppositeCenter.x,
+      anchorY: oppositeCenter.y,
+      startPointerX: startPointer.x,
+      startPointerY: startPointer.y,
       startWidth: element.offsetWidth,
       startHeight: element.offsetHeight,
       propertyWidth: group.width,
       propertyHeight: group.height,
-      widthUnit: canvasBounds.width / 100,
-      heightUnit: canvasBounds.height / 100,
-      positionWidthUnit: canvasBounds.width / 100,
-      positionHeightUnit: canvasBounds.height / 100,
+      widthUnit: canvas.clientWidth / 100,
+      heightUnit: canvas.clientHeight / 100,
+      positionWidthUnit: canvas.clientWidth / 100,
+      positionHeightUnit: canvas.clientHeight / 100,
       lockAspectRatio: false,
     };
   }
@@ -3543,11 +3579,13 @@ function deletePage(pageId) {
     const drag = dragRef.current;
     if (drag.pointerId != null && drag.pointerId !== event.pointerId) return;
     const bounds = canvasRef.current.getBoundingClientRect();
+    const point = clientPointToCanvas(event.clientX, event.clientY, bounds, drag.coordinateZoom ?? canvasZoom);
+    if (!point) return;
     if (drag.type === "resize-shape") {
       const resized = resizeObjectFromCorner({
         ...drag,
-        pointerX: event.clientX - bounds.left,
-        pointerY: event.clientY - bounds.top,
+        pointerX: point.x,
+        pointerY: point.y,
       });
       if (!resized) return;
       setObjects((current) => updateObjectById(current, drag.id, {
@@ -3560,15 +3598,15 @@ function deletePage(pageId) {
     }
     if (drag.type === "resize") {
       if (!drag.startVectorLengthSquared) return;
-      const pointerVectorX = event.clientX - drag.anchorX;
-      const pointerVectorY = event.clientY - drag.anchorY;
+      const pointerVectorX = point.x - drag.anchorX;
+      const pointerVectorY = point.y - drag.anchorY;
       const scale = Math.max(0.05, (
         pointerVectorX * drag.startVectorX + pointerVectorY * drag.startVectorY
       ) / drag.startVectorLengthSquared);
       setObjects((current) => current.map((object) => {
         if (object.id !== drag.id) return object;
-        const x = ((drag.anchorX + (drag.startCenterX - drag.anchorX) * scale - bounds.left) / bounds.width) * 100;
-        const y = ((drag.anchorY + (drag.startCenterY - drag.anchorY) * scale - bounds.top) / bounds.height) * 100;
+        const x = ((drag.anchorX + (drag.startCenterX - drag.anchorX) * scale) / drag.canvasWidth) * 100;
+        const y = ((drag.anchorY + (drag.startCenterY - drag.anchorY) * scale) / drag.canvasHeight) * 100;
         if (object.type === "text") {
           return { ...object, x, y, fontSize: Math.min(200, Math.max(8, Math.round(drag.startFontSize * scale))) };
         }
@@ -3580,8 +3618,8 @@ function deletePage(pageId) {
       return;
     }
     if (drag.type === "resize-group") {
-      const pointerX = ((event.clientX - bounds.left) / bounds.width) * 100;
-      const pointerY = ((event.clientY - bounds.top) / bounds.height) * 100;
+      const pointerX = (point.x / canvasRef.current.clientWidth) * 100;
+      const pointerY = (point.y / canvasRef.current.clientHeight) * 100;
       const x = drag.corner.includes("left") ? Math.min(pointerX, drag.anchorX - 0.1) : Math.max(pointerX, drag.anchorX + 0.1);
       const y = drag.corner.includes("top") ? Math.min(pointerY, drag.anchorY - 0.1) : Math.max(pointerY, drag.anchorY + 0.1);
       const width = Math.max(0.2, Math.abs(x - drag.anchorX));
@@ -4664,13 +4702,14 @@ function deletePage(pageId) {
             key={corner.id}
             type="button"
             className={`resize-handle resize-handle--${corner.id}`}
+            style={{ "--inverse-canvas-zoom": 1 / canvasZoom }}
             data-resize-corner={corner.id}
             aria-label={`Resize selected ${object.type} from ${corner.label}`}
             onPointerDown={(event) => resizeObject(event, object, corner)}
-          />
+          ><span className="resize-handle-visual" aria-hidden="true" /></button>
         ))}
         {interactive && object.type === "group" && groupSelection && <div className="group-selection-outline" data-group-id={object.id} onPointerDown={(event) => moveObject(event, object)}>
-          {resizeCorners.map((corner) => <button key={corner.id} type="button" className={`resize-handle resize-handle--${corner.id}`} data-resize-corner={corner.id} aria-label={`Resize group from ${corner.label}`} onPointerDown={(event) => resizeGroup(event, object, corner)} />)}
+          {resizeCorners.map((corner) => <button key={corner.id} type="button" className={`resize-handle resize-handle--${corner.id}`} style={{ "--inverse-canvas-zoom": 1 / canvasZoom }} data-resize-corner={corner.id} aria-label={`Resize group from ${corner.label}`} onPointerDown={(event) => resizeGroup(event, object, corner)}><span className="resize-handle-visual" aria-hidden="true" /></button>)}
         </div>}
         {interactive && selected && object.shape === "custom" && activeTool === "node" && <svg className="vector-node-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ transform: `scale(${object.flipHorizontal ? -1 : 1}, ${object.flipVertical ? -1 : 1})` }}>
           {(object.paths ?? []).map((path, pathIndex) => path.nodes.map((node, nodeIndex) => <g key={`${pathIndex}-${nodeIndex}`}>
@@ -4992,7 +5031,7 @@ function deletePage(pageId) {
             <button type="button" title="Show document at actual pixel size" onClick={zoomCanvasToActualSize}><span aria-hidden="true">1:1</span><span className="command-label">Actual</span></button>
             <span className="command-divider" />
             <button type="button" title="Add a page" onClick={addPage}><span aria-hidden="true">＋▤</span><span className="command-label">Add Page</span></button>
-            <button type="button" className="page-setup-action" title="Document size, units, print resolution, and background" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}><span aria-hidden="true">⚙</span><span className="command-label">Page Setup</span><small>{canvasSize === "Custom" ? `${formatUnitValue(dimensions.width, sizeUnit)} × ${formatUnitValue(dimensions.height, sizeUnit)} ${sizeUnit}` : canvasSize} · {printDpi} DPI</small></button>
+            <button type="button" className="page-setup-action" title="Document size, units, print resolution, and background" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}><span aria-hidden="true">⚙</span><span className="command-label">Page Setup</span><small>{pageSizeSummary} · {printDpi} DPI</small></button>
           </div>
           <div className="editor-context-toolbar" role="group" aria-label="Contextual properties">
             {selectedIds.length > 1 && <>
@@ -5113,7 +5152,7 @@ function deletePage(pageId) {
             <button type="button" title="Fit page" aria-label="Fit page to workspace" onClick={resetCanvasView}><span>⊡</span></button>
           </aside>
           <main className="editor-stage">
-            <div className="stage-heading"><div><span>YOUR CANVAS</span><h1>{templateName}</h1></div><button type="button" className="document-size-trigger" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}>▱ <span>Page Setup</span><small>{canvasSize} · {printDpi} DPI</small></button>
+            <div className="stage-heading"><div><span>YOUR CANVAS</span><h1>{templateName}</h1></div><button type="button" className="document-size-trigger" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}>▱ <span>Page Setup</span><small>{pageSizeSummary} · {printDpi} DPI</small></button>
             </div>
             <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
               <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
@@ -5124,6 +5163,10 @@ function deletePage(pageId) {
               <button type="button" aria-label="Fit Drawing" title="Fit all objects (Ctrl+Shift+A)" disabled={!objects.length} onClick={fitDrawingInView}>Fit All</button>
             </div>
             <div ref={canvasWrapRef} className="canvas-wrap">
+          <div className="page-ruler-layer" aria-label={`Page rulers in ${sizeUnit}`} style={{ left: "50%", top: "50%", width: `${fittedCanvas.width}px`, height: `${fittedCanvas.height}px`, transform: `translate(calc(-50% + ${canvasViewOffset.x}px), calc(-50% + ${canvasViewOffset.y}px)) scale(${canvasZoom})`, transformOrigin: "center center", "--inverse-canvas-zoom": 1 / canvasZoom }}>
+            <div className="page-ruler-horizontal" aria-hidden="true">{pageRulerXTicks.map((tick) => <span key={tick.value} className="page-ruler-tick page-ruler-tick--horizontal" style={{ left: `${tick.position}%` }}><i /><b>{tick.label}</b></span>)}</div>
+            <div className="page-ruler-vertical" aria-hidden="true">{pageRulerYTicks.map((tick) => <span key={tick.value} className="page-ruler-tick page-ruler-tick--vertical" style={{ top: `${tick.position}%` }}><i /><b>{tick.label}</b></span>)}</div>
+          </div>
           <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: `${fittedCanvas.width}px`, height: `${fittedCanvas.height}px`, maxWidth: "none", maxHeight: "none", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); setShapeDraftState(null); envelopeDragRef.current = null; }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
                 <div className="poster-artwork">
                   {activeBackgroundImage && <img className="poster-background-image" src={activeBackgroundImage} alt="" draggable="false" />}
@@ -5549,10 +5592,11 @@ function deletePage(pageId) {
           <section className="document-size-dialog" role="dialog" aria-modal="true" aria-labelledby="document-size-title">
             <header className="document-size-header"><div><span>DOCUMENT</span><h2 id="document-size-title">Page Setup</h2><p>Page size, print resolution, units, and background</p></div><button type="button" aria-label="Close Page Setup" onClick={closePageSetup}>×</button></header>
             <div className="size-picker mobile-size-picker">
-              <label htmlFor="mobile-canvas-size">Canvas size<select id="mobile-canvas-size" value={canvasSize} onChange={(event) => { setCanvasSize(event.target.value); if (window.matchMedia(COMPACT_EDITOR_QUERY).matches && event.target.value !== "Custom") setDocumentSizeOpen(false); }}>{Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option></select></label>
-              <label htmlFor="mobile-canvas-unit">Units<select id="mobile-canvas-unit" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="px">Pixels (px)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option></select></label>
-              {canvasSize === "Custom" && <div className="custom-size-fields"><label>W<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>H<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={sizeUnit === "px" ? 50000 : sizeUnit === "in" ? 520.83 : 43.4} step={sizeUnit === "px" ? 1 : 0.01} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
-              {canvasSize !== "Custom" && <span className="size-picker-physical">{formatUnitValue(physicalSize.widthIn * CSS_PIXELS_PER_INCH, sizeUnit)} × {formatUnitValue(physicalSize.heightIn * CSS_PIXELS_PER_INCH, sizeUnit)} {sizeUnit}</span>}{canvasSize === "Custom" && <span className="size-picker-physical">{formatUnitValue(dimensions.width, "px")} × {formatUnitValue(dimensions.height, "px")} CSS px</span>}
+              <label htmlFor="mobile-canvas-size">Canvas size<select id="mobile-canvas-size" value={canvasSize} onChange={(event) => { changeCanvasSize(event.target.value); if (window.matchMedia(COMPACT_EDITOR_QUERY).matches && event.target.value !== "Custom") setDocumentSizeOpen(false); }}>{Object.keys(canvasSizes).map((size) => <option key={size}>{size}</option>)}<option value="Custom">Custom dimensions</option></select></label>
+              <label htmlFor="page-orientation">Orientation<select id="page-orientation" aria-label="Page orientation" value={pageOrientation} onChange={(event) => updatePageOrientation(event.target.value)}><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option></select></label>
+              <label htmlFor="mobile-canvas-unit">Units<select id="mobile-canvas-unit" aria-label="Page measurement units" value={sizeUnit} onChange={(event) => { setSizeUnit(event.target.value); setDimensionError(""); }}><option value="mm">Millimeters (mm)</option><option value="cm">Centimeters (cm)</option><option value="in">Inches (in)</option><option value="ft">Feet (ft)</option><option value="px">Pixels (px)</option></select></label>
+              {canvasSize === "Custom" && <div className="custom-size-fields"><label>Width<input aria-label={`Custom width in ${sizeUnit}`} type="number" min="0.01" max={formatUnitValue(50_000, sizeUnit)} step={({ px: 1, mm: 0.01, cm: 0.001, in: 0.0001, ft: 0.00001 })[sizeUnit]} value={formatUnitValue(customWidth, sizeUnit)} onChange={(event) => updateCustomDimension("width", event.target.value)} /></label><label>Height<input aria-label={`Custom height in ${sizeUnit}`} type="number" min="0.01" max={formatUnitValue(50_000, sizeUnit)} step={({ px: 1, mm: 0.01, cm: 0.001, in: 0.0001, ft: 0.00001 })[sizeUnit]} value={formatUnitValue(customHeight, sizeUnit)} onChange={(event) => updateCustomDimension("height", event.target.value)} /></label></div>}
+              <span className="size-picker-physical" aria-live="polite">{pageSizeSummary}</span>
               <label htmlFor="mobile-print-dpi">Print resolution<select id="mobile-print-dpi" value={printDpi} onChange={(event) => setPrintDpi(Number(event.target.value))}><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="600">600 DPI</option></select></label>
               <span className="size-picker-print">Print export: {previewExportDimensions.width} × {previewExportDimensions.height} px at {Math.round(previewExportDimensions.effectiveDpi)} DPI{previewExportDimensions.wasLimited ? " (memory limit applied)" : ""}</span><small className="size-picker-help">Editor dimensions use 96 CSS pixels per inch. Print resolution changes export pixels, not the editor canvas.</small>{dimensionError && <span className="size-picker-error" role="alert">{dimensionError}</span>}
             </div>

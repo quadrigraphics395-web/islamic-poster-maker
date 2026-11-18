@@ -7,7 +7,7 @@ const pixelPng = Buffer.from(
 
 async function openEditor(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /Create New Poster/ }).click();
+  await expect(page.locator(".editor-page")).toBeVisible();
   const setup = page.getByRole("dialog", { name: "Page Setup" });
   if (await setup.isVisible()) await setup.getByRole("button", { name: "Close Page Setup" }).click();
   await expect(page.locator(".poster-canvas")).toBeVisible();

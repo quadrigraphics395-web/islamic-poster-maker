@@ -7,9 +7,13 @@ export const MAX_EXPORT_DIMENSION = 16_384;
 
 const unitFactors = {
   px: 1,
+  mm: CSS_PIXELS_PER_INCH / 25.4,
+  cm: CSS_PIXELS_PER_INCH / 2.54,
   in: CSS_PIXELS_PER_INCH,
   ft: CSS_PIXELS_PER_FOOT,
 };
+
+const unitPrecision = { px: 0, mm: 2, cm: 3, in: 4, ft: 5 };
 
 export function toCssPixels(value, unit = "px") {
   const amount = Number(value);
@@ -27,8 +31,24 @@ export function fromCssPixels(value, unit = "px") {
 export function formatUnitValue(cssPixels, unit) {
   const value = fromCssPixels(cssPixels, unit);
   if (value == null) return "";
-  if (unit === "px") return String(Math.round(value));
-  return String(Number(value.toFixed(2)));
+  return String(Number(value.toFixed(unitPrecision[unit] ?? 2)));
+}
+
+export function createRulerTicks(cssPixels, unit, targetTickCount = 10) {
+  const total = fromCssPixels(cssPixels, unit);
+  if (total == null || !Number.isFinite(targetTickCount) || targetTickCount < 1) return [];
+  const rawStep = total / targetTickCount;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+  const values = [];
+  for (let value = 0; value < total; value += step) values.push(value);
+  if (!values.length || total - values.at(-1) > Number.EPSILON * total) values.push(total);
+  return values.map((value) => ({
+    value,
+    position: (value / total) * 100,
+    label: String(Number(value.toFixed(unitPrecision[unit] ?? 2))),
+  }));
 }
 
 export function getPrintExportDimensions(widthCssPx, heightCssPx, dpi = DEFAULT_PRINT_DPI, maxPixels = MAX_EXPORT_PIXELS, maxDimension = MAX_EXPORT_DIMENSION) {
@@ -71,7 +91,7 @@ export function getPresetPhysicalSize(preset) {
 
 export function readProjectDocumentMeta(project = {}) {
   return {
-    sizeUnit: ["px", "in", "ft"].includes(project.documentMeta?.sizeUnit) ? project.documentMeta.sizeUnit : "px",
+    sizeUnit: ["px", "mm", "cm", "in", "ft"].includes(project.documentMeta?.sizeUnit) ? project.documentMeta.sizeUnit : "px",
     printDpi: [150, 300, 600].includes(project.documentMeta?.printDpi) ? project.documentMeta.printDpi : DEFAULT_PRINT_DPI,
   };
 }

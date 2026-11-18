@@ -13,8 +13,6 @@ test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) => errors.push(error.message));
 
   await page.goto("/");
-  await expect(page.locator(".hero")).toBeVisible();
-  await page.getByRole("button", { name: /Create New Poster/ }).click();
   await expect(page.locator(".editor-page")).toBeVisible();
   await expect(page.locator(".poster-canvas")).toBeVisible();
   const pageSetup = page.getByRole("dialog", { name: "Page Setup" });

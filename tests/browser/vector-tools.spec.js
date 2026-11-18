@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("curve flyout draws an editable Bézier path and exposes node editing and vector SVG export", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-edge", "Left toolbox interactions run on desktop.");
   await page.goto("/");
-  await page.getByRole("button", { name: /Create New Poster/ }).click();
+  await expect(page.locator(".editor-page")).toBeVisible();
   await expect(page.locator(".poster-canvas")).toBeVisible();
   const pageSetup = page.getByRole("dialog", { name: "Page Setup" });
   if (await pageSetup.isVisible()) await pageSetup.getByRole("button", { name: "Close Page Setup" }).click();
@@ -63,8 +63,7 @@ test("curve flyout draws an editable Bézier path and exposes node editing and v
 test("Pen creates straight nodes, supports open-path finish and Escape cancels an unfinished draft", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-edge", "Left toolbox interactions run on desktop.");
   await page.goto("/");
-  await expect(page.locator(".hero")).toBeVisible();
-  await page.getByRole("button", { name: /Create New Poster/ }).click();
+  await expect(page.locator(".editor-page")).toBeVisible();
   const pageSetup = page.getByRole("dialog", { name: "Page Setup" });
   if (await pageSetup.isVisible()) await pageSetup.getByRole("button", { name: "Close Page Setup" }).click();
 
@@ -87,8 +86,7 @@ test("Pen creates straight nodes, supports open-path finish and Escape cancels a
 test("mobile Vector navigation exposes Pen, Bézier, and node editing", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-edge-emulated", "This check covers the mobile tool navigation.");
   await page.goto("/");
-  await expect(page.locator(".hero")).toBeVisible();
-  await page.getByRole("button", { name: /Create New Poster/ }).click();
+  await expect(page.locator(".editor-page")).toBeVisible();
   const pageSetup = page.getByRole("dialog", { name: "Page Setup" });
   if (await pageSetup.isVisible()) await pageSetup.getByRole("button", { name: "Close Page Setup" }).click();
   const vectorMenu = page.locator("#editor-menu-vector");
