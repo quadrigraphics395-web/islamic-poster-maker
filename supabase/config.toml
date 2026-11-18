@@ -1,0 +1,2 @@
+[functions.template-asset-url]
+verify_jwt = false

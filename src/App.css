@@ -1650,13 +1650,22 @@ footer {
   white-space: pre-wrap;
 }
 
-.canvas-text-outline {
+.canvas-text-shadow {
+  position: relative;
   z-index: 0;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  pointer-events: none;
+}
+
+.canvas-text-outline {
+  position: relative;
+  z-index: 1;
 }
 
 .canvas-text-fill {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .canvas-shape {
@@ -2321,6 +2330,35 @@ footer {
   vector-effect: non-scaling-stroke;
 }
 
+.envelope-node-overlay {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.envelope-node-overlay polygon {
+  fill: rgb(32 116 82 / 5%);
+  stroke: #176b4d;
+  stroke-width: 0.4;
+  stroke-dasharray: 1.4 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.envelope-node {
+  fill: #d5ad62;
+  stroke: #fff;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: all;
+  cursor: move;
+  touch-action: none;
+}
+
 .vector-node,
 .vector-node-handle {
   pointer-events: all;
@@ -2350,6 +2388,16 @@ footer {
   pointer-events: none;
 }
 
+.shape-drawing-preview {
+  position: absolute;
+  z-index: 7;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .selection-marquee {
   position: absolute;
   z-index: 8;
@@ -2360,9 +2408,16 @@ footer {
 
 .poster-canvas.tool-freehand,
 .poster-canvas.tool-pen,
-.poster-canvas.tool-multi {
+.poster-canvas.tool-bezier,
+.poster-canvas.tool-multi,
+.poster-canvas.tool-rectangle,
+.poster-canvas.tool-ellipse,
+.poster-canvas.tool-polygon,
+.poster-canvas.tool-knife {
   cursor: crosshair;
 }
+
+.poster-canvas.tool-envelope { cursor: default; }
 
 .poster-canvas.tool-pan { cursor: grab; }
 .poster-canvas.tool-pan:active { cursor: grabbing; }
@@ -3949,6 +4004,14 @@ body {
   }
   .toolbox-section-label { width: 100%; padding: 6px 0 2px; color: #879188; font-size: 7px; font-weight: 800; letter-spacing: .07em; text-align: center; }
   .toolbox-divider { width: 28px; height: 1px; flex: 0 0 1px; margin: 4px 0; background: #e4e9e4; }
+  .toolbox-flyout-anchor { position: relative; z-index: 20; }
+  .editor-toolbox .toolbox-flyout-anchor > button { position: relative; }
+  .toolbox-flyout-anchor > button i { position: absolute; right: 1px; bottom: 2px; color: #78867b; font-size: 9px; font-style: normal; }
+  .toolbox-flyout { position: fixed; z-index: 30; width: 176px; display: grid; gap: 3px; padding: 6px; border: 1px solid #dce4dc; border-radius: 9px; background: #fff; box-shadow: 0 8px 26px #1d332533; }
+  .advanced-toolbox-flyout { width: 204px; }
+  .editor-toolbox .toolbox-flyout button { width: 100%; min-height: 34px; display: flex; justify-content: flex-start; padding: 0 9px; border: 1px solid transparent; border-radius: 6px; background: #fff; color: #334b3c; font-size: 11px; cursor: pointer; }
+  .editor-toolbox .toolbox-flyout button:hover,
+  .editor-toolbox .toolbox-flyout button.is-current { border-color: #b7d1bd; background: #e9f3ea; color: #12613e; }
   .editor-toolbox > button,
   .toolbox-color {
     position: relative;
@@ -4282,4 +4345,59 @@ body {
   .flower-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+@media (min-width: 1101px) {
+  .editor-workspace { grid-template-columns: 54px minmax(0, 1fr) 292px 68px; }
+  .editor-workspace.is-properties-collapsed { grid-template-columns: 54px minmax(0, 1fr) 0 68px; }
+}
+
+@media (min-width: 601px) and (max-width: 1100px) {
+  .editor-workspace { grid-template-columns: 48px minmax(0, 1fr) minmax(196px, 22vw) 54px; }
+  .editor-workspace.is-properties-collapsed { grid-template-columns: 48px minmax(0, 1fr) 0 54px; }
+}
+
+.desktop-color-rail {
+  grid-column: 4;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid #e3e9e2;
+  background: #fff;
+}
+
+.qadri-color-palette {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 5px;
+  color: #415548;
+  font-family: inherit;
+}
+
+.palette-target-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 7px; background: #eef2ed; }
+.palette-target-switch button { min-width: 0; min-height: 24px; padding: 0 2px; border: 0; border-radius: 5px; background: transparent; color: #607066; font: inherit; font-size: 9px; cursor: pointer; }
+.palette-target-switch button.is-active { background: #fff; color: #176b4d; box-shadow: 0 1px 3px #20352b20; font-weight: 700; }
+.palette-current-color { display: grid; justify-items: center; gap: 4px; color: #728076; font-size: 8px; text-align: center; }
+.palette-current-color label { position: relative; width: 40px; height: 24px; overflow: hidden; border: 1px solid #d5ddd5; border-radius: 5px; background: repeating-conic-gradient(#e7ece7 0% 25%, #fff 0% 50%) 0 0 / 8px 8px; }
+.palette-current-color input { position: absolute; inset: -8px; width: 56px; height: 40px; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.palette-swatches { min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 4px; overflow: auto; padding: 1px 2px 4px; scrollbar-width: thin; }
+.palette-swatch { position: relative; width: 100%; aspect-ratio: 1.2; min-height: 20px; border: 1px solid #00000018; border-radius: 5px; background: var(--swatch-color); cursor: pointer; }
+.palette-swatch:hover { outline: 2px solid #637d6b; outline-offset: 1px; z-index: 1; }
+.palette-swatch.is-active { outline: 2px solid #176b4d; outline-offset: 1px; z-index: 1; }
+.palette-swatch:disabled { opacity: .4; cursor: default; }
+.palette-swatch-none { background: repeating-conic-gradient(#e0e6e0 0% 25%, #fff 0% 50%) 0 0 / 9px 9px; color: #9a3939; font-size: 18px; line-height: 1; }
+.qadri-color-palette > small { color: #849087; font-size: 7px; line-height: 1.35; text-align: center; }
+.qadri-color-palette.is-compact { height: auto; max-height: 236px; gap: 6px; padding: 8px; border: 1px solid #e3e9e2; border-radius: 9px; background: #fff; }
+.qadri-color-palette.is-compact .palette-current-color { grid-template-columns: auto 42px; align-items: center; justify-content: space-between; text-align: left; }
+.qadri-color-palette.is-compact .palette-swatches { flex: initial; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; overflow: auto; }
+.qadri-color-palette.is-compact .palette-swatch { min-height: 28px; aspect-ratio: 1; }
+.qadri-color-palette.is-compact > small { font-size: 9px; text-align: left; }
+.canvas-view-controls .zoom-readout { min-width: 58px; color: #5f7166; font-size: 10px; text-align: center; }
+
+@media (max-width: 600px) {
+  .desktop-color-rail { display: none; }
+  .qadri-color-palette.is-compact .palette-swatches { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 }

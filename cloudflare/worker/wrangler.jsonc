@@ -1,0 +1,46 @@
+{
+  // Existing namespace: qadri-poster-template-assets (no KV namespace name field in Wrangler bindings).
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/schema.json",
+  "name": "qadri-poster-template-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-08",
+  // Local/default environment is for development only. Production is a separate Worker.
+  "workers_dev": false,
+  "secrets": {
+    "required": ["ADMIN_KEY_HASH", "SESSION_SECRET"]
+  },
+  "vars": {
+    "FRONTEND_ORIGINS": "https://islamic-poster-maker.vercel.app,http://localhost:5173"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "qadri-poster-templates",
+    "database_id": "71aeb207-cd34-471f-a436-2704bd610cd6",
+    "migrations_dir": "migrations"
+  }],
+  "kv_namespaces": [{
+    "binding": "ASSETS",
+    "id": "1df3cee128974e24846ecf44a963414f"
+  }],
+  "env": {
+    "production": {
+      "workers_dev": true,
+      "vars": {
+        "FRONTEND_ORIGINS": "https://qadri-poster-maker.vercel.app,https://islamic-poster-maker.vercel.app"
+      },
+      "d1_databases": [{
+        "binding": "DB",
+        "database_name": "qadri-poster-templates",
+        "database_id": "71aeb207-cd34-471f-a436-2704bd610cd6",
+        "migrations_dir": "migrations"
+      }],
+      "kv_namespaces": [{
+        "binding": "ASSETS",
+        "id": "1df3cee128974e24846ecf44a963414f"
+      }],
+      "secrets": {
+        "required": ["ADMIN_EMAIL", "ADMIN_KEY_HASH", "SESSION_SECRET"]
+      }
+    }
+  }
+}

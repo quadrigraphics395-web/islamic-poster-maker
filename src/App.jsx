@@ -12,7 +12,8 @@ import { resizeObjectFromCorner } from "./utils/objectGeometry.js";
 import { createProjectRecord, readProjects, writeProjects } from "./utils/projectStorage.js";
 import { createTemplateRecord, deleteTemplate, readTemplates, writeTemplate } from "./utils/templateStorage.js";
 import svgPathParser from "svg-path-parser";
-import { applyBooleanGeometry, createBooleanVector, flattenVectorPath, pathToSvg, simplifyPolyline } from "./utils/vectorGeometry.js";
+import { applyBooleanGeometry, breakApartVector, convertPrimitiveToCurves, createBlendVectors, createBooleanVector, createCompoundVector, createVectorFromGeometry, deformVectorPaths, flattenVectorPath, offsetPolygonGeometry, pathToSvg, regularPolygonPoints, simplifyPolyline, splitGeometryByLine } from "./utils/vectorGeometry.js";
+import { exportCustomVectorsSvg } from "./utils/vectorSvgExport.js";
 import { defaultTransparencyStops, imageMaskSvg, normalizeTransparencyMask, transparencyCss } from "./utils/transparency.js";
 import { builtInFonts } from "./fontLibrary.js";
 import { deletePersonalFont, listPersonalFonts, preparePersonalFont, savePersonalFont } from "./utils/personalFonts.js";
@@ -23,7 +24,8 @@ import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackg
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
-import { clampCanvasPan, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./utils/canvasViewport.js";
+import { clampCanvasPan, clampCanvasZoom, fitBoundsInViewport, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./utils/canvasViewport.js";
+import { QADRI_COLOR_PALETTE } from "./utils/colorPalette.js";
 import { importSvgDocument } from "./utils/svgImport.js";
 import { isEditableKeyboardTarget } from "./utils/editorKeyboard.js";
 
@@ -51,6 +53,10 @@ const fontOptions = [
   { label: "Georgia (system font)", value: "Georgia, serif", category: "English", sample: "Beautiful Poster Design" },
   { label: "Times New Roman (system font)", value: '"Times New Roman", serif', category: "English", sample: "Beautiful Poster Design" },
 ];
+function resolveTextFontFamily(family) {
+  return String(family ?? "Arial, sans-serif")
+    .replace(/"Noto Nastaliq Urdu"/g, '"Noto Nastaliq Urdu Variable"');
+}
 const proportionalShapeIds = new Set(["circle", "circle-outline", "square", "circle-ornament"]);
 const COMPACT_EDITOR_QUERY = "(max-width: 600px), (min-width: 601px) and (max-width: 900px) and (max-height: 500px)";
 
@@ -69,6 +75,7 @@ const textEffectDefaults = {
   strokeEnabled: false,
   strokeColor: "#442d0b",
   strokeWidth: 2,
+  strokeLineJoin: "round",
   shadowEnabled: false,
   shadowColor: "#000000",
   shadowBlur: 8,
@@ -225,6 +232,7 @@ const resizeCorners = [
   { id: "bottom-left", label: "bottom left", opposite: "top-right" },
   { id: "bottom-right", label: "bottom right", opposite: "top-left" },
 ];
+const primitiveVectorShapes = ["rectangle", "ellipse", "polygon"];
 
 function getShapeSvgMarkup(shape, color) {
   const definition = islamicShapes.find((item) => item.id === shape);
@@ -246,7 +254,7 @@ function getTextTypographyStyle(object) {
     fontWeight: object.fontWeight ?? (object.bold ? 700 : 400),
     fontStyle: object.italic ? "italic" : "normal",
     textAlign: object.align,
-    fontFamily: object.fontFamily ?? "Arial, sans-serif",
+    fontFamily: resolveTextFontFamily(object.fontFamily),
     lineHeight: object.lineHeight ?? 1.25,
     letterSpacing: `${object.letterSpacing ?? 0}px`,
     wordSpacing: `${object.wordSpacing ?? 0}px`,
@@ -258,7 +266,7 @@ function getTextPreviewStyle(object) {
   const style = {
     ...getTextTypographyStyle(object),
     color: object.color ?? textEffectDefaults.color,
-    opacity: (object.opacity ?? 100) / 100,
+    opacity: (object.fillOpacity ?? 100) / 100,
   };
   if (object.fillMode === "image" && object.imageFillSrc) {
     const scale = object.imageFillScale ?? 100;
@@ -294,20 +302,66 @@ function getTextPreviewStyle(object) {
   return style;
 }
 
-function getTextStrokeStyle(object) {
+function getTextShadowPreviewStyle(object) {
+  const shadows = [];
+
+  if (object.shadowEnabled) {
+    shadows.push(`${object.shadowOffsetX ?? 0}px ${object.shadowOffsetY ?? 0}px ${object.shadowBlur ?? 0}px ${colorWithOpacity(object.shadowColor ?? "#000000", object.shadowOpacity ?? 65)}`);
+  }
+
+  if (object.glowEnabled) {
+    shadows.push(`0 0 ${object.glowBlur ?? 0}px ${colorWithOpacity(object.glowColor ?? "#f5ca65", object.glowOpacity ?? 75)}`);
+  }
+
   return {
     ...getTextTypographyStyle(object),
     color: "transparent",
     WebkitTextFillColor: "transparent",
-    WebkitTextStroke: object.strokeEnabled ? `${object.strokeWidth ?? 0}px ${object.strokeColor ?? "#442d0b"}` : "0 transparent",
+    WebkitTextStroke: "0 transparent",
+    opacity: 1,
+    backgroundImage: "none",
+    backgroundClip: "border-box",
+    WebkitBackgroundClip: "border-box",
+    textShadow: shadows.join(", "),
+    pointerEvents: "none",
+  };
+}
+function getTextStrokeStyle(object) {
+  const width = Math.max(0, Number(object.strokeWidth ?? 0));
+  const color = colorWithOpacity(object.strokeColor ?? "#442d0b", object.strokeOpacity ?? 100);
+  const rounded = (object.strokeLineJoin ?? "round") === "round";
+  const roundShadows = [];
+
+  if (object.strokeEnabled && rounded && width > 0) {
+    const rings = Math.max(1, Math.ceil(width));
+    const angles = 32;
+
+    for (let ring = 1; ring <= rings; ring += 1) {
+      const radius = (width * ring) / rings;
+
+      for (let angleIndex = 0; angleIndex < angles; angleIndex += 1) {
+        const angle = (angleIndex * Math.PI * 2) / angles;
+        const x = (Math.cos(angle) * radius).toFixed(2);
+        const y = (Math.sin(angle) * radius).toFixed(2);
+        roundShadows.push(`${x}px ${y}px 0 ${color}`);
+      }
+    }
+  }
+
+  return {
+    ...getTextTypographyStyle(object),
+    color: "transparent",
+    WebkitTextFillColor: "transparent",
+    WebkitTextStroke: object.strokeEnabled && !rounded
+      ? `${width}px ${color}`
+      : "0 transparent",
     paintOrder: "normal",
     opacity: 1,
-    textShadow: "none",
+    textShadow: rounded ? roundShadows.join(", ") : "none",
     backgroundImage: "none",
     pointerEvents: "none",
   };
 }
-
 function getTextDesignPreviewStyle(design) {
   const style = design.style;
   return getTextPreviewStyle({
@@ -352,7 +406,7 @@ function createTextImageMask(object, image, lines, maxWidth, lineOffset, scaleX)
   mask.width = width;
   mask.height = height;
   const maskContext = mask.getContext("2d");
-  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${resolveTextFontFamily(object.fontFamily)}`;
   maskContext.textAlign = object.align ?? "center";
   maskContext.textBaseline = "middle";
   maskContext.direction = object.direction === "auto"
@@ -383,7 +437,7 @@ function drawTextInnerShadow(context, object, lines, maxWidth, lineOffset, scale
   mask.width = width;
   mask.height = height;
   const maskContext = mask.getContext("2d");
-  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  maskContext.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${fontSize}px ${resolveTextFontFamily(object.fontFamily)}`;
   maskContext.textAlign = object.align ?? "center";
   maskContext.textBaseline = "middle";
   maskContext.direction = object.direction === "auto" ? (/\u0600-\u06ff/.test(object.text) ? "rtl" : "ltr") : object.direction ?? "ltr";
@@ -508,7 +562,7 @@ function drawTextObject(context, object, x, y, scaleX, scaleY, maxWidth, imageFi
   context.rotate(((object.rotation ?? 0) * Math.PI) / 180);
   context.scale(object.flipHorizontal ? -1 : 1, object.flipVertical ? -1 : 1);
   context.globalAlpha = (object.opacity ?? 100) / 100;
-  context.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+  context.font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${resolveTextFontFamily(object.fontFamily)}`;
   context.textAlign = object.align ?? "center";
   context.textBaseline = "middle";
   context.direction = object.direction === "auto"
@@ -556,7 +610,7 @@ function drawTextObject(context, object, x, y, scaleX, scaleY, maxWidth, imageFi
     if (object.strokeEnabled && (object.strokeWidth ?? 0) > 0) {
       context.strokeStyle = object.strokeColor ?? "#442d0b";
       context.lineWidth = object.strokeWidth * scaleX;
-      context.lineJoin = "round";
+      context.lineJoin = object.strokeLineJoin === "sharp" ? "miter" : "round";
       context.strokeText(line, anchorX, lineY);
     }
 
@@ -651,12 +705,29 @@ const [fontNotice, setFontNotice] = useState("");
 const personalFontInputRef = useRef(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [activeTool, setActiveTool] = useState("select");
+  const [curveFlyoutOpen, setCurveFlyoutOpen] = useState(false);
+  const [curveFlyoutPosition, setCurveFlyoutPosition] = useState({ top: 0, left: 58 });
+  const [advancedFlyoutOpen, setAdvancedFlyoutOpen] = useState(false);
+  const [advancedFlyoutPosition, setAdvancedFlyoutPosition] = useState({ top: 0, left: 58 });
   const [pathDraft, setPathDraft] = useState(null);
+  const [shapeDraft, setShapeDraft] = useState(null);
+  const shapeDraftRef = useRef(null);
+  const envelopeDragRef = useRef(null);
+  const envelopeSourceRef = useRef(null);
+  const [envelopePoints, setEnvelopePoints] = useState(null);
+  const [polygonSides, setPolygonSides] = useState(6);
+  const [contourDistance, setContourDistance] = useState(12);
+  const [contourSteps, setContourSteps] = useState(1);
+  const [contourDirection, setContourDirection] = useState("outward");
+  const contourSettingsRef = useRef({ distance: contourDistance, steps: contourSteps, direction: contourDirection });
+  const [blendSteps, setBlendSteps] = useState(4);
+  const blendStepsRef = useRef(blendSteps);
   const [closedDrawing, setClosedDrawing] = useState(true);
   const [vectorFill, setVectorFill] = useState("#d5ad62");
   const [vectorStroke, setVectorStroke] = useState("#17352c");
   const [vectorStrokeWidth, setVectorStrokeWidth] = useState(2);
   const [vectorOpacity, setVectorOpacity] = useState(100);
+  const [paletteTarget, setPaletteTarget] = useState("fill");
   const [fillEnabled, setFillEnabled] = useState(true);
   const [strokeEnabled, setStrokeEnabled] = useState(true);
   const [selectionMarquee, setSelectionMarquee] = useState(null);
@@ -667,6 +738,7 @@ const personalFontInputRef = useRef(null);
   const [groupEditMode, setGroupEditMode] = useState(false);
   const [groupEditGroupId, setGroupEditGroupId] = useState(null);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState(null);
+  const [selectedNodeIndices, setSelectedNodeIndices] = useState([]);
   const [vectorMessage, setVectorMessage] = useState("");
   const [svgImportBusy, setSvgImportBusy] = useState(false);
   const [svgImportNotice, setSvgImportNotice] = useState("");
@@ -736,6 +808,8 @@ useEffect(() => {
   const [templateName, setTemplateName] = useState("Create New Poster");
   const [history, setHistory] = useState([]);
 const [redoStack, setRedoStack] = useState([]);
+  const historySelectionSnapshotsRef = useRef(new Map());
+  const textEditSessionRef = useRef(null);
 const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -900,11 +974,21 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   };
   const selectedObject = findObject(objects, selectedId);
   const canEditTemplates = isTemplateAdmin;
-  const selectedShapeIsVector = selectedObject?.type === "shape" && (selectedObject.shape === "custom" || islamicShapes.some((shape) => shape.id === selectedObject.shape));
+  const selectedShapeIsVector = selectedObject?.type === "shape" && (selectedObject.shape === "custom" || primitiveVectorShapes.includes(selectedObject.shape) || islamicShapes.some((shape) => shape.id === selectedObject.shape));
   const selectedLayerIndex = objects.findIndex((object) => object.id === selectedId);
   const dimensions = canvasSize === "Custom"
     ? { width: customWidth, height: customHeight }
     : canvasSizes[canvasSize];
+  const selectedObjects = objects.filter((object) => selectedIds.includes(object.id));
+  const selectedVectorOperationEnabled = selectedObjects.length >= 2
+    && selectedObjects.every((object) => object.type === "shape" && Boolean(objectPolygonGeometry(object)?.length));
+  const selectedBooleanOperationEnabled = selectedObjects.length >= 2
+    && selectedObjects.every((object) => object.type === "image"
+      || (object.type === "shape" && Boolean(objectPolygonGeometry(object)?.length)));
+  const canBreakApartSelectedVector = selectedObjects.length === 1
+    && selectedObjects[0]?.type === "shape"
+    && selectedObjects[0]?.shape === "custom"
+    && Boolean(objectPolygonGeometry(selectedObjects[0])?.length > 1);
   const presetPhysicalSize = canvasSize === "Custom" ? null : getPresetPhysicalSize(canvasSizes[canvasSize]);
   const physicalSize = presetPhysicalSize ?? { widthIn: dimensions.width / CSS_PIXELS_PER_INCH, heightIn: dimensions.height / CSS_PIXELS_PER_INCH };
   const previewExportDimensions = getPrintExportDimensions(dimensions.width, dimensions.height, printDpi);
@@ -922,6 +1006,21 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     canvasViewportSize.height || dimensions.height,
   );
   useEffect(() => {
+    if (blendStepsRef.current === blendSteps) return undefined;
+    blendStepsRef.current = blendSteps;
+    if (!selectedObjects.some((object) => object.blendSourceIds?.length === 2)) return undefined;
+    const timer = window.setTimeout(() => createBlend(blendSteps), 250);
+    return () => window.clearTimeout(timer);
+  }, [blendSteps]);
+  useEffect(() => {
+    const previous = contourSettingsRef.current;
+    if (previous.distance === contourDistance && previous.steps === contourSteps && previous.direction === contourDirection) return undefined;
+    contourSettingsRef.current = { distance: contourDistance, steps: contourSteps, direction: contourDirection };
+    if (!selectedObject?.contourSourceId) return undefined;
+    const timer = window.setTimeout(() => createContours(), 300);
+    return () => window.clearTimeout(timer);
+  }, [contourDistance, contourSteps, contourDirection]);
+  useEffect(() => {
     if (!editor || !canvasWrapRef.current) return undefined;
     const workspace = canvasWrapRef.current;
     const onWheel = (event) => {
@@ -930,7 +1029,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       event.preventDefault();
       const bounds = workspace.getBoundingClientRect();
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? bounds.height : 1);
-      const nextZoom = Math.min(3, Math.max(0.5, canvasZoom * Math.pow(1.2, -delta / 100)));
+      const nextZoom = clampCanvasZoom(canvasZoom * Math.pow(1.2, -delta / 100));
       if (nextZoom === canvasZoom) return;
       setCanvasZoom(nextZoom);
       setCanvasViewOffset((current) => zoomOffsetAtPoint(
@@ -1147,15 +1246,58 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
   }
 
   function changeCanvasZoom(multiplier) {
-    const nextZoom = Math.min(3, Math.max(0.5, canvasZoom * multiplier));
+    const nextZoom = clampCanvasZoom(canvasZoom * multiplier);
+    setCanvasZoom(nextZoom);
+    const wrap = canvasWrapRef.current;
+    const bounds = wrap?.getBoundingClientRect();
+    if (!bounds?.width || !bounds?.height) {
+      setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
+      return;
+    }
+    setCanvasViewOffset((current) => zoomOffsetAtPoint(current, canvasZoom, nextZoom, bounds.width / 2, bounds.height / 2,
+      bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height));
+  }
+
+  function zoomCanvasToActualSize() {
+    const nextZoom = clampCanvasZoom(1 / Math.max(fittedCanvas.scale, 0.001));
     setCanvasZoom(nextZoom);
     setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
   }
 
-  function zoomCanvasToActualSize() {
-    const nextZoom = Math.min(3, Math.max(0.5, 1 / Math.max(fittedCanvas.scale, 0.001)));
-    setCanvasZoom(nextZoom);
-    setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
+  function fitObjectsInView(ids) {
+    const chosen = objects.filter((object) => ids.includes(object.id));
+    if (!chosen.length || !canvasViewportSize.width || !canvasViewportSize.height) return;
+    const boxes = chosen.map((object) => {
+      const widthPercent = object.type === "text"
+        ? Math.min(95, Math.max(8, (String(object.text ?? "").length * (object.fontSize ?? 32) * 0.58 / dimensions.width) * 100))
+        : object.width ?? (object.type === "image" ? 36 : 18);
+      const heightPercent = object.type === "text"
+        ? Math.min(60, Math.max(5, ((object.fontSize ?? 32) * (String(object.text ?? "").split("\n").length + 1.2) / dimensions.height) * 100))
+        : object.height ?? (object.type === "image" ? widthPercent : 18);
+      return {
+        left: object.x / 100 * fittedCanvas.width - widthPercent / 200 * fittedCanvas.width,
+        top: object.y / 100 * fittedCanvas.height - heightPercent / 200 * fittedCanvas.height,
+        right: object.x / 100 * fittedCanvas.width + widthPercent / 200 * fittedCanvas.width,
+        bottom: object.y / 100 * fittedCanvas.height + heightPercent / 200 * fittedCanvas.height,
+      };
+    });
+    const left = Math.min(...boxes.map((box) => box.left));
+    const top = Math.min(...boxes.map((box) => box.top));
+    const right = Math.max(...boxes.map((box) => box.right));
+    const bottom = Math.max(...boxes.map((box) => box.bottom));
+    const fit = fitBoundsInViewport({ x: left, y: top, width: Math.max(0.01, right - left), height: Math.max(0.01, bottom - top) },
+      fittedCanvas.width, fittedCanvas.height, canvasViewportSize.width, canvasViewportSize.height);
+    if (!fit) return;
+    setCanvasZoom(fit.zoom);
+    setCanvasViewOffset(fit.offset);
+  }
+
+  function fitSelectionInView() {
+    fitObjectsInView(selectedIds);
+  }
+
+  function fitDrawingInView() {
+    fitObjectsInView(objects.map((object) => object.id));
   }
 
   function closeMobileProperties() {
@@ -1251,14 +1393,66 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     });
   }
 
-  function saveHistory() {
+  function saveHistory(snapshot = serializeObjectSnapshot(objects)) {
   setHistory((prev) => [
     ...prev,
-    serializeObjectSnapshot(objects)
+    snapshot
   ]);
 
   setRedoStack([]);
 }
+
+  function beginTextEdit(object) {
+    if (!object) return;
+    textEditSessionRef.current = {
+      objectId: object.id,
+      originalText: object.text,
+      snapshot: serializeObjectSnapshot(objects),
+      recorded: false,
+      appended: false,
+    };
+  }
+
+  function updateTextFromEditor(value) {
+    const object = objects.find((item) => item.id === selectedId);
+    if (!object) return;
+
+    let session = textEditSessionRef.current;
+    if (!session || session.objectId !== object.id) {
+      beginTextEdit(object);
+      session = textEditSessionRef.current;
+    }
+
+    if (value !== object.text) {
+      if (value !== session.originalText && !session.recorded) {
+        session.appended = history.at(-1) !== session.snapshot;
+        if (session.appended) {
+          setHistory((previous) => previous.at(-1) === session.snapshot
+            ? previous
+            : [...previous, session.snapshot]);
+        }
+        setRedoStack([]);
+        session.recorded = true;
+      } else if (value === session.originalText && session.recorded) {
+        if (session.appended) {
+          setHistory((previous) => previous.at(-1) === session.snapshot
+            ? previous.slice(0, -1)
+            : previous);
+        }
+        session.recorded = false;
+        session.appended = false;
+      }
+    }
+
+    updateSelected({ text: value });
+  }
+
+  function endTextEdit(objectId) {
+    if (textEditSessionRef.current?.objectId === objectId) {
+      textEditSessionRef.current = null;
+    }
+  }
+
 function undo() {
   if (pathDraft?.length) {
     changePathDraft((current) => current.length > 1 ? current.slice(0, -1) : null);
@@ -1276,7 +1470,8 @@ function undo() {
 
   const restored = restoreObjectSnapshot(last);
   setObjects(restored);
-  const stillSelected = selectedIds.filter((id) => findObject(restored, id));
+  const rememberedSelection = historySelectionSnapshotsRef.current.get(last);
+  const stillSelected = (rememberedSelection ?? selectedIds).filter((id) => findObject(restored, id));
   setSelectedIds(stillSelected);
   setSelectedId(stillSelected.at(-1) ?? null);
 
@@ -1297,7 +1492,8 @@ function redo() {
 
   const restored = restoreObjectSnapshot(last);
   setObjects(restored);
-  const stillSelected = selectedIds.filter((id) => findObject(restored, id));
+  const rememberedSelection = historySelectionSnapshotsRef.current.get(last);
+  const stillSelected = (rememberedSelection ?? selectedIds).filter((id) => findObject(restored, id));
   setSelectedIds(stillSelected);
   setSelectedId(stillSelected.at(-1) ?? null);
 
@@ -1452,6 +1648,82 @@ function deletePage(pageId) {
   function updateSelectedFromToolbar(updates) {
     saveHistory();
     updateSelected(updates);
+  }
+
+  function applyPaletteColor(color, target = paletteTarget) {
+    const ids = new Set(selectedIds);
+    if (!ids.size) {
+      if (target === "fill") setVectorFill(color === "none" ? vectorFill : color);
+      else setVectorStroke(color === "none" ? vectorStroke : color);
+      if (color === "none") target === "fill" ? setFillEnabled(false) : setStrokeEnabled(false);
+      else target === "fill" ? setFillEnabled(true) : setStrokeEnabled(true);
+      return;
+    }
+    let changed = false;
+    const updateTree = (item, inheritedSelection = false) => {
+      const chosen = inheritedSelection || ids.has(item.id);
+      if (item.type === "group") return { ...item, children: (item.children ?? []).map((child) => updateTree(child, chosen)) };
+      if (!chosen) return item;
+      let updates;
+      if (target === "fill" && item.type === "shape") {
+        updates = color === "none" ? { fillEnabled: false } : { color, fillEnabled: true };
+      } else if (target === "fill" && item.type === "text") {
+        updates = color === "none"
+          ? { color: "transparent", fillMode: "solid", fillOpacity: 0 }
+          : { color, fillMode: "solid", fillOpacity: 100 };
+      } else if (target === "outline" && item.type === "image") {
+        updates = color === "none" ? { imageOutlineEnabled: false } : { imageOutlineColor: color, imageOutlineEnabled: true };
+      } else if (target === "outline" && (item.type === "shape" || item.type === "text")) {
+        updates = color === "none" ? { strokeEnabled: false } : { strokeColor: color, strokeEnabled: true };
+      }
+      if (!updates) return item;
+      if (Object.entries(updates).every(([key, value]) => item[key] === value)) return item;
+      changed = true;
+      return { ...item, ...updates };
+    };
+    const next = objects.map((item) => updateTree(item));
+    if (!changed) return;
+    saveHistory(serializeObjectSnapshot(objects));
+    setObjects(next);
+  }
+
+  function renderColorPalette(compact = false) {
+    const currentColor = paletteTarget === "outline"
+      ? selectedObject?.strokeColor ?? selectedObject?.imageOutlineColor ?? vectorStroke
+      : selectedObject?.color ?? vectorFill;
+    const noPaint = paletteTarget === "fill"
+      ? selectedObject?.fillEnabled === false || selectedObject?.color === "transparent"
+      : selectedObject?.strokeEnabled === false || selectedObject?.imageOutlineEnabled === false;
+    const canApply = selectedIds.length === 0 || selectedObjects.some((object) => paletteTarget === "fill"
+      ? object.type === "shape" || object.type === "text"
+      : object.type === "shape" || object.type === "text" || object.type === "image");
+    return <section className={`qadri-color-palette${compact ? " is-compact" : ""}`} aria-label="Color palette" onClick={compact ? (event) => event.stopPropagation() : undefined}>
+      <div className="palette-target-switch" role="group" aria-label="Color target">
+        <button type="button" className={paletteTarget === "fill" ? "is-active" : ""} aria-pressed={paletteTarget === "fill"} onClick={() => setPaletteTarget("fill")}>Fill</button>
+        <button type="button" className={paletteTarget === "outline" ? "is-active" : ""} aria-pressed={paletteTarget === "outline"} onClick={() => setPaletteTarget("outline")}>Outline</button>
+      </div>
+      <div className="palette-current-color">
+        <span>{paletteTarget === "fill" ? "Current fill" : "Current outline"}</span>
+        <label title="Choose a custom color" style={{ backgroundColor: noPaint ? "transparent" : currentColor }}>
+          <input type="color" aria-label={`Custom ${paletteTarget} color`} value={/^#[\da-f]{6}$/i.test(currentColor ?? "") ? currentColor : "#000000"} disabled={!canApply} onChange={(event) => applyPaletteColor(event.target.value)} />
+        </label>
+      </div>
+      <div className="palette-swatches" role="group" aria-label="Named colors">
+        <button type="button" className={`palette-swatch palette-swatch-none${noPaint ? " is-active" : ""}`} aria-label={paletteTarget === "fill" ? "No fill" : "No outline"} title={paletteTarget === "fill" ? "No fill" : "No outline"} disabled={!canApply} onClick={() => applyPaletteColor("none")} onContextMenu={(event) => { event.preventDefault(); applyPaletteColor("none", "outline"); }}><span>∕</span></button>
+        {QADRI_COLOR_PALETTE.map((color) => <button
+          key={color.hex}
+          type="button"
+          className={`palette-swatch${!noPaint && currentColor?.toLowerCase() === color.hex ? " is-active" : ""}`}
+          style={{ "--swatch-color": color.hex }}
+          aria-label={`${paletteTarget === "fill" ? "Fill" : "Outline"} ${color.name}`}
+          title={`${color.name} · ${color.hex} (right-click for outline)`}
+          disabled={!canApply}
+          onClick={() => applyPaletteColor(color.hex)}
+          onContextMenu={(event) => { event.preventDefault(); applyPaletteColor(color.hex, "outline"); }}
+        />)}
+      </div>
+      <small>{selectedIds.length ? `${selectedIds.length} selected · click applies ${paletteTarget}` : `Click to set drawing ${paletteTarget}`}</small>
+    </section>;
   }
 
   function beginImageCrop() {
@@ -1636,6 +1908,217 @@ function deletePage(pageId) {
     selectObject(id);
   }
 
+  function setShapeDraftState(next) {
+    shapeDraftRef.current = next;
+    setShapeDraft(next);
+  }
+
+  function createPrimitiveObject(tool, start, end, keepSquare = false) {
+    let width = Math.abs(end.x - start.x);
+    let height = Math.abs(end.y - start.y);
+    if (keepSquare || tool === "polygon") {
+      const size = Math.max(width, height);
+      width = size;
+      height = size;
+    }
+    if (width < 0.4 || height < 0.4) return null;
+    return {
+      id: nextObjectId("shape"),
+      type: "shape",
+      shape: tool,
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+      width,
+      height,
+      ...(tool === "polygon" ? { sides: polygonSides } : {}),
+      color: vectorFill,
+      fillEnabled,
+      fillOpacity: 100,
+      strokeEnabled,
+      strokeColor: vectorStroke,
+      strokeOpacity: 100,
+      strokeWidth: vectorStrokeWidth,
+      opacity: vectorOpacity,
+      keepAspectRatio: keepSquare || tool === "polygon",
+      locked: false,
+    };
+  }
+
+  function finishShapeGesture() {
+    const draft = shapeDraftRef.current;
+    if (!draft) return;
+    setShapeDraftState(null);
+    if (draft.tool === "knife") {
+      performKnifeCut(draft.start, draft.point);
+      return;
+    }
+    const vector = createPrimitiveObject(draft.tool, draft.start, draft.point, draft.keepSquare);
+    if (!vector) {
+      setVectorMessage("Drag farther to draw a vector shape.");
+      return;
+    }
+    const next = [...objects, vector];
+    commitVectorOperation(next, selectedIds, [vector.id]);
+    setVectorMessage(`${draft.tool[0].toUpperCase()}${draft.tool.slice(1)} created as an editable vector object.`);
+  }
+
+  function convertSelectedToCurves() {
+    if (!selectedObject || !primitiveVectorShapes.includes(selectedObject.shape)) {
+      setVectorMessage("Convert to Curves supports rectangles, ellipses, and regular polygons.");
+      return;
+    }
+    let converted;
+    try { converted = convertPrimitiveToCurves(selectedObject); } catch (error) {
+      setVectorMessage(error.message);
+      return;
+    }
+    saveHistory();
+    setObjects((current) => updateObjectById(current, selectedObject.id, converted));
+    setSelectedNodeIndex(null);
+    setSelectedNodeIndices([]);
+    setVectorMessage(`${selectedObject.shape[0].toUpperCase()}${selectedObject.shape.slice(1)} converted to editable curves.`);
+  }
+
+  function selectedShapeStyle(source = selectedObject) {
+    return {
+      color: source?.color ?? vectorFill,
+      fillEnabled: source?.fillEnabled !== false,
+      strokeEnabled: source?.strokeEnabled,
+      strokeColor: source?.strokeColor,
+      strokeWidth: source?.strokeWidth,
+      fillOpacity: source?.svgImported ? (source.fillOpacity ?? 1) * 100 : source?.fillOpacity ?? 100,
+      strokeOpacity: source?.svgImported ? (source.strokeOpacity ?? 1) * 100 : source?.strokeOpacity ?? 100,
+      strokeLineJoin: source?.strokeLineJoin,
+      opacity: source?.opacity,
+      transparencyMask: source?.transparencyMask,
+      transparencyMasks: source?.transparencyMasks,
+      canvasWidth: dimensions.width,
+      canvasHeight: dimensions.height,
+    };
+  }
+
+  function createContours() {
+    if (selectedIds.length !== 1 || !selectedObject || selectedObject.type !== "shape") {
+      setVectorMessage("Contour needs one supported closed vector shape selected.");
+      return;
+    }
+    const source = selectedObject.contourSourceId
+      ? objects.find((object) => object.id === selectedObject.contourSourceId) ?? selectedObject
+      : selectedObject;
+    let base;
+    const generated = [];
+    try {
+      base = objectPolygonGeometry(source);
+      if (!base?.length) throw new Error("Contour supports closed vector shapes only.");
+      let previous = base;
+      for (let step = 1; step <= contourSteps; step += 1) {
+        const current = offsetPolygonGeometry(base, (contourDirection === "outward" ? 1 : -1) * contourDistance * step);
+        const ring = applyBooleanGeometry("difference", contourDirection === "outward" ? [current, previous] : [previous, current]);
+        generated.push(createVectorFromGeometry(ring, {
+          ...selectedShapeStyle(source),
+          color: source.strokeEnabled ? source.strokeColor ?? source.color : source.color,
+        }));
+        previous = current;
+      }
+    } catch (error) {
+      setVectorMessage(error.message);
+      return;
+    }
+    const oldContourIds = new Set(objects.filter((object) => object.contourSourceId === source.id).map((object) => object.id));
+    const created = generated.map((object, index) => ({
+      ...object,
+      id: nextObjectId("contour"),
+      shape: "custom",
+      contourSourceId: source.id,
+      contourStep: index + 1,
+      contourDistance,
+      contourDirection,
+    }));
+    const next = objects.filter((object) => !oldContourIds.has(object.id));
+    const sourceIndex = next.findIndex((object) => object.id === source.id);
+    next.splice(sourceIndex + (contourDirection === "inward" ? 1 : 0), 0, ...created);
+    commitVectorOperation(next, selectedIds, created.map((object) => object.id));
+    setVectorMessage(`Created ${created.length} editable ${contourDirection} contour step${created.length === 1 ? "" : "s"}. Editing settings regenerates this contour.`);
+  }
+
+  function createBlend(stepCount = blendSteps) {
+    const selected = objects.filter((object) => selectedIds.includes(object.id));
+    const selectedGenerated = selected.find((object) => object.blendSourceIds?.length === 2);
+    const sourceIds = selectedGenerated?.blendSourceIds ?? selected.map((object) => object.id);
+    const sources = sourceIds.map((id) => objects.find((object) => object.id === id)).filter(Boolean);
+    if (sources.length !== 2 || sources.some((object) => object.type !== "shape" || !["custom", ...primitiveVectorShapes].includes(object.shape))) {
+      setVectorMessage("Blend needs two editable custom vectors or primitive shapes.");
+      return;
+    }
+    let generated;
+    try {
+      const curves = sources.map((object) => object.shape === "custom" ? object : convertPrimitiveToCurves(object));
+      generated = createBlendVectors(curves[0], curves[1], stepCount);
+    } catch (error) {
+      setVectorMessage(error.message);
+      return;
+    }
+    const oldBlendIds = new Set(objects.filter((object) => object.blendSourceIds?.join("|") === sourceIds.join("|")).map((object) => object.id));
+    const blendId = nextObjectId("blend-group");
+    const created = generated.map((object, index) => ({ ...object, id: nextObjectId("blend"), shape: "custom", blendId, blendSourceIds: sourceIds, blendStep: index + 1, blendStepCount: stepCount }));
+    const next = objects.filter((object) => !oldBlendIds.has(object.id));
+    const insertAt = Math.max(...sources.map((object) => next.findIndex((entry) => entry.id === object.id))) + 1;
+    next.splice(insertAt, 0, ...created);
+    commitVectorOperation(next, selectedIds, created.map((object) => object.id));
+    setVectorMessage(`Created ${created.length} editable blend shapes. Editing Steps regenerates this blend.`);
+  }
+
+  function performKnifeCut(start, end) {
+    const selected = objects.filter((object) => selectedIds.includes(object.id));
+    if (!selected.length || selected.some((object) => object.type !== "shape")) {
+      setVectorMessage("Knife needs one or more closed vector shapes selected.");
+      return;
+    }
+    const startPx = [start.x * dimensions.width / 100, start.y * dimensions.height / 100];
+    const endPx = [end.x * dimensions.width / 100, end.y * dimensions.height / 100];
+    let pieces;
+    try {
+      pieces = selected.flatMap((object) => splitGeometryByLine(objectPolygonGeometry(object), startPx, endPx, dimensions.width, dimensions.height)
+        .map((geometry) => ({ ...createVectorFromGeometry(geometry, selectedShapeStyle(object)), sourceId: object.id })));
+    } catch (error) {
+      setVectorMessage(error.message);
+      return;
+    }
+    if (pieces.length !== selected.length * 2) {
+      setVectorMessage("Knife did not split every selected shape; all source objects were left unchanged.");
+      return;
+    }
+    const firstIndex = Math.min(...selected.map((object) => objects.indexOf(object)));
+    const removeIds = new Set(selected.map((object) => object.id));
+    const created = pieces.map(({ sourceId, ...object }) => ({ ...object, id: nextObjectId("cut"), shape: "custom" }));
+    const next = objects.filter((object) => !removeIds.has(object.id));
+    next.splice(Math.min(firstIndex, next.length), 0, ...created);
+    commitVectorOperation(next, selectedIds, created.map((object) => object.id));
+    setVectorMessage(`Knife split the selected vector into ${created.length} editable pieces.`);
+  }
+
+  function activateEnvelopeTool() {
+    if (selectedObject?.shape !== "custom" || selectedObject.svgPathData) {
+      setVectorMessage("Envelope needs a custom vector. Convert a primitive to curves first.");
+      return;
+    }
+    setEnvelopePoints([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]);
+    envelopeSourceRef.current = {
+      id: selectedObject.id,
+      paths: selectedObject.paths.map((path) => ({ ...path, nodes: path.nodes.map((node) => ({ ...node, in: { ...node.in }, out: { ...node.out } })) })),
+    };
+    setActiveTool("envelope");
+  }
+
+  function beginEnvelopeHandle(event, object, index) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    saveHistory();
+    envelopeDragRef.current = { id: object.id, index, sourcePaths: envelopeSourceRef.current?.id === object.id ? envelopeSourceRef.current.paths : object.paths };
+    dragRef.current = { type: "envelope", pointerId: event.pointerId };
+  }
+
   function addFlower(src) {
     if (!src) return;
 
@@ -1691,10 +2174,12 @@ function deletePage(pageId) {
       paths,
       fillRule: "evenodd",
       fillEnabled: closed && fillEnabled,
+      fillOpacity: 100,
       strokeEnabled: strokeEnabled || !closed,
       color: vectorFill,
       strokeColor: vectorStroke,
       strokeWidth: vectorStrokeWidth,
+      strokeOpacity: 100,
       opacity: vectorOpacity,
       locked: false,
     };
@@ -1830,14 +2315,18 @@ function deletePage(pageId) {
     saveHistory();
     updateSelected({ paths: [{ ...path, nodes }] });
     setSelectedNodeIndex(segmentIndex + 1);
+    setSelectedNodeIndices([segmentIndex + 1]);
   }
 
   function removeSelectedNode() {
     const path = selectedObject?.paths?.[0];
-    if (!path || selectedNodeIndex == null || path.nodes.length <= (path.closed ? 3 : 2)) return;
+    const selected = new Set(selectedNodeIndices.length ? selectedNodeIndices : selectedNodeIndex == null ? [] : [selectedNodeIndex]);
+    const minimum = path?.closed ? 3 : 2;
+    if (!path || !selected.size || path.nodes.length - selected.size < minimum) return;
     saveHistory();
-    updateSelected({ paths: [{ ...path, nodes: path.nodes.filter((_, index) => index !== selectedNodeIndex) }] });
+    updateSelected({ paths: [{ ...path, nodes: path.nodes.filter((_, index) => !selected.has(index)) }] });
     setSelectedNodeIndex(null);
+    setSelectedNodeIndices([]);
   }
 
   function toggleSelectedNodeType() {
@@ -1849,6 +2338,52 @@ function deletePage(pageId) {
         ? { ...node, type: "corner", in: { x: 0, y: 0 }, out: { x: 0, y: 0 } }
         : { ...node, type: "smooth", in: { x: -8, y: 0 }, out: { x: 8, y: 0 } }
       : node) }] });
+  }
+
+  function selectAllPathNodes() {
+    const nodes = selectedObject?.paths?.[0]?.nodes ?? [];
+    const indexes = nodes.map((_, index) => index);
+    setSelectedNodeIndices(indexes);
+    setSelectedNodeIndex(indexes.at(-1) ?? null);
+  }
+
+  function setSelectedNodeType(type) {
+    const path = selectedObject?.paths?.[0];
+    if (!path || selectedNodeIndex == null) return;
+    const selected = new Set(selectedNodeIndices.length ? selectedNodeIndices : [selectedNodeIndex]);
+    saveHistory();
+    updateSelected({ paths: [{ ...path, nodes: path.nodes.map((node, index) => {
+      if (!selected.has(index)) return node;
+      if (type === "cusp") return { ...node, type: "corner" };
+      const current = Math.hypot(node.out?.x ?? 0, node.out?.y ?? 0) || Math.hypot(node.in?.x ?? 0, node.in?.y ?? 0) || 8;
+      const angle = Math.atan2(node.out?.y ?? -(node.in?.y ?? 0), node.out?.x ?? -(node.in?.x ?? 0));
+      const out = { x: Math.cos(angle) * current, y: Math.sin(angle) * current };
+      const inLength = type === "symmetrical" ? current : Math.hypot(node.in?.x ?? 0, node.in?.y ?? 0) || current;
+      const incoming = { x: -Math.cos(angle) * inLength, y: -Math.sin(angle) * inLength };
+      return { ...node, type, in: incoming, out };
+    }) }] });
+  }
+
+  function toggleSelectedNodeCurve() {
+    const path = selectedObject?.paths?.[0];
+    if (!path || selectedNodeIndex == null) return;
+    saveHistory();
+    updateSelected({ paths: [{ ...path, nodes: path.nodes.map((node, index) => index === selectedNodeIndex
+      ? (node.in?.x || node.in?.y || node.out?.x || node.out?.y)
+        ? { ...node, in: { x: 0, y: 0 }, out: { x: 0, y: 0 }, type: "corner" }
+        : { ...node, in: { x: -8, y: 0 }, out: { x: 8, y: 0 }, type: "smooth" }
+      : node) }] });
+  }
+
+  function downloadSelectedVectorSvg() {
+    if (selectedObject?.type !== "shape" || selectedObject.shape !== "custom") return;
+    const content = exportCustomVectorsSvg([selectedObject], dimensions);
+    const url = URL.createObjectURL(new Blob([content], { type: "image/svg+xml;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${String(selectedObject.id || "qadri-vector").replace(/[^a-zA-Z0-9_-]/g, "-")}.svg`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function pathDataToRings(pathData) {
@@ -1892,6 +2427,12 @@ function deletePage(pageId) {
   function shapeMarkupRings(object) {
     const definition = islamicShapes.find((shape) => shape.id === object.shape);
     if (!definition) {
+      if (object.shape === "rectangle") return [[{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]];
+      if (object.shape === "ellipse") return [Array.from({ length: 96 }, (_, index) => ({
+        x: 50 + Math.cos(index * Math.PI * 2 / 96) * 50,
+        y: 50 + Math.sin(index * Math.PI * 2 / 96) * 50,
+      }))];
+      if (object.shape === "polygon") return [regularPolygonPoints(object.sides)];
       if (["line", "divider", "circle-outline"].includes(object.shape)) return [];
       const width = 100;
       const height = 100;
@@ -1960,7 +2501,7 @@ function deletePage(pageId) {
       ]);
       return [[[...points, points[0]]]];
     }
-    if (object.type !== "shape" || (!isPreset && object.shape !== "custom" && !["circle", "square", "rectangle"].includes(object.shape))) return null;
+    if (object.type !== "shape" || (!isPreset && object.shape !== "custom" && ![...primitiveVectorShapes, "circle", "square"].includes(object.shape))) return null;
     let localRings;
     if (object.shape === "custom") {
       localRings = flattenVectorPath(object.paths ?? [], 24);
@@ -1988,6 +2529,22 @@ function deletePage(pageId) {
         y: centerY * scaleCanvasY / 100 + px * Math.sin(rotation) + py * Math.cos(rotation),
       };
     }));
+    const customPaths = object.shape === "custom" ? object.paths ?? [] : [];
+    if (customPaths.length === worldRings.length && customPaths.every((path) => Number.isInteger(path.polygonIndex))) {
+      const polygonIndices = [...new Set(customPaths.map((path) => path.polygonIndex))].sort((a, b) => a - b);
+      return polygonIndices.map((polygonIndex) => {
+        const ringIndices = customPaths.map((path, index) => ({ path, index })).filter(({ path }) => path.polygonIndex === polygonIndex);
+        const closeRing = (ring) => {
+          const points = ring.map((point) => [point.x, point.y]);
+          if (points.length) points.push([...points[0]]);
+          return points;
+        };
+        const outer = ringIndices.find(({ path }) => !path.hole);
+        return outer
+          ? [closeRing(worldRings[outer.index]), ...ringIndices.filter(({ path }) => path.hole).map(({ index }) => closeRing(worldRings[index]))]
+          : [];
+      }).filter((polygon) => polygon.length && polygon[0].length >= 4);
+    }
     return ringsToMultiPolygon(worldRings);
   }
 
@@ -2267,6 +2824,10 @@ function deletePage(pageId) {
       return;
     }
     if (chosen.some((object) => object.type === "image")) {
+      if (operation === "combine") {
+        setVectorMessage("Combine keeps separate vector contours. Choose closed vector shapes only; use Weld for raster images.");
+        return;
+      }
       performImageBoolean(operation, chosen, keepCutter);
       return;
     }
@@ -2291,17 +2852,21 @@ function deletePage(pageId) {
     const styleSource = operation === "difference" ? ordered[0] : ordered.at(-1);
     let result;
     try {
-      result = createBooleanVector(operation, orderedGeometries, {
+      const style = {
         color: styleSource.color ?? vectorFill,
         strokeEnabled: styleSource.strokeEnabled,
         strokeColor: styleSource.strokeColor,
         strokeWidth: styleSource.strokeWidth,
+        strokeLineJoin: styleSource.strokeLineJoin,
         opacity: styleSource.opacity,
         transparencyMask: styleSource.transparencyMask,
         transparencyMasks: styleSource.transparencyMasks,
         canvasWidth: dimensions.width,
         canvasHeight: dimensions.height,
-      });
+      };
+      result = operation === "combine"
+        ? createCompoundVector(orderedGeometries, style)
+        : createBooleanVector(operation, orderedGeometries, style);
     } catch (error) {
       setVectorMessage(error.message);
       return;
@@ -2311,12 +2876,52 @@ function deletePage(pageId) {
     const cutter = ordered.at(-1);
     const removeIds = new Set(keepCutter && operation === "difference" ? ordered.slice(0, -1).map((object) => object.id) : ordered.map((object) => object.id));
     const firstIndex = Math.min(...objects.map((object, index) => removeIds.has(object.id) ? index : Infinity));
-    saveHistory();
     const next = objects.filter((object) => !removeIds.has(object.id));
     next.splice(Math.min(firstIndex, next.length), 0, result);
+    commitVectorOperation(next, chosen.map((object) => object.id), [id]);
+    setVectorMessage(operation === "difference" && keepCutter ? `Trim completed; “${cutter.shape}” cutter kept.` : operation === "combine" ? "Combine completed; editable vector contours retained." : "Boolean vector operation completed.");
+  }
+
+  function commitVectorOperation(next, previousSelection, nextSelection) {
+    const before = serializeObjectSnapshot(objects);
+    saveHistory(before);
+    historySelectionSnapshotsRef.current.set(before, previousSelection);
+    historySelectionSnapshotsRef.current.set(serializeObjectSnapshot(next), nextSelection);
+    setRedoStack([]);
     setObjects(next);
-    selectObject(id);
-    setVectorMessage(operation === "difference" && keepCutter ? `Trim completed; “${cutter.shape}” cutter kept.` : "Boolean vector operation completed.");
+    setSelectedIds(nextSelection);
+    setSelectedId(nextSelection.at(-1) ?? null);
+  }
+
+  function breakApartSelectedVector() {
+    const selected = objects.filter((object) => selectedIds.includes(object.id));
+    if (selected.length !== 1 || selected[0].type !== "shape" || selected[0].shape !== "custom") {
+      setVectorMessage("Select one compound custom vector to Break Apart.");
+      return;
+    }
+    const source = selected[0];
+    let parts;
+    try {
+      parts = breakApartVector(objectPolygonGeometry(source), {
+        color: source.color,
+        strokeEnabled: source.strokeEnabled,
+        strokeColor: source.strokeColor,
+        strokeWidth: source.strokeWidth,
+        strokeLineJoin: source.strokeLineJoin,
+        opacity: source.opacity,
+        canvasWidth: dimensions.width,
+        canvasHeight: dimensions.height,
+      });
+    } catch (error) {
+      setVectorMessage(error.message);
+      return;
+    }
+    const sourceIndex = objects.findIndex((object) => object.id === source.id);
+    const created = parts.map((part) => ({ ...source, ...part, id: nextObjectId("part"), flipHorizontal: false, flipVertical: false, rotation: 0 }));
+    const next = [...objects];
+    next.splice(sourceIndex, 1, ...created);
+    commitVectorOperation(next, [source.id], created.map((part) => part.id));
+    setVectorMessage(`Break Apart created ${created.length} editable vector components.`);
   }
 
   function getCanvasPoint(event) {
@@ -2335,9 +2940,13 @@ function deletePage(pageId) {
         event.preventDefault();
         dragRef.current = null;
         const [first, second] = [...points.values()];
+        const bounds = canvasWrapRef.current?.getBoundingClientRect();
         pinchRef.current = {
           distance: Math.hypot(first.x - second.x, first.y - second.y) || 1,
           zoom: canvasZoom,
+          offset: canvasViewOffset,
+          center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
+          bounds,
         };
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
@@ -2350,22 +2959,43 @@ function deletePage(pageId) {
       dragRef.current = { type: "view-pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offset: canvasViewOffset };
       return;
     }
+    if (activeTool === "zoom") {
+      changeCanvasZoom(event.shiftKey ? 1 / 1.2 : 1.2);
+      return;
+    }
     if (activeTool === "select" && canvasZoom > 1 && !event.target.closest(".canvas-object")) {
       event.currentTarget.setPointerCapture(event.pointerId);
       dragRef.current = { type: "view-pan", pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, offset: canvasViewOffset };
       return;
     }
     const point = getCanvasPoint(event);
+    if (["rectangle", "ellipse", "polygon", "knife"].includes(activeTool)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setShapeDraftState({ tool: activeTool, start: point, point, keepSquare: event.shiftKey });
+      dragRef.current = { type: "shape-draw", pointerId: event.pointerId };
+      return;
+    }
     if (activeTool === "freehand") {
       event.currentTarget.setPointerCapture(event.pointerId);
       changePathDraft([point]);
       return;
     }
-    if (activeTool === "pen") {
+    if (activeTool === "pen" || activeTool === "bezier") {
       event.currentTarget.setPointerCapture(event.pointerId);
       const currentDraft = pathDraftRef.current;
       if (currentDraft?.length >= 3 && Math.hypot(currentDraft[0].x - point.x, currentDraft[0].y - point.y) < 1.8) {
         finishDrawing(true);
+      } else if (activeTool === "bezier" && currentDraft?.length) {
+        const previous = currentDraft.at(-1);
+        const dx = point.x - previous.x;
+        const dy = point.y - previous.y;
+        const handle = { x: dx / 3, y: dy / 3 };
+        changePathDraft((current) => {
+          const nodes = [...current];
+          nodes[nodes.length - 1] = { ...nodes.at(-1), type: "smooth", out: handle };
+          nodes.push({ ...point, type: "smooth", in: { x: -handle.x, y: -handle.y }, out: handle });
+          return nodes;
+        });
       } else {
         changePathDraft((current) => [...(current ?? []), { ...point, type: "corner", in: { x: 0, y: 0 }, out: { x: 0, y: 0 } }]);
         dragRef.current = { type: "pen-handle", pointerId: event.pointerId, start: point };
@@ -2387,14 +3017,46 @@ function deletePage(pageId) {
       const points = [...canvasPointersRef.current.values()];
       if (points.length >= 2) {
         const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
-        const nextZoom = Math.min(3, Math.max(0.5, pinchRef.current.zoom * distance / pinchRef.current.distance));
+        const nextZoom = clampCanvasZoom(pinchRef.current.zoom * distance / pinchRef.current.distance);
         setCanvasZoom(nextZoom);
-        setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
+        const center = { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 };
+        const { bounds, center: startCenter } = pinchRef.current;
+        const anchored = bounds && startCenter
+          ? zoomOffsetAtPoint(pinchRef.current.offset, pinchRef.current.zoom, nextZoom,
+            startCenter.x - bounds.left, startCenter.y - bounds.top, bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height)
+          : pinchRef.current.offset;
+        setCanvasViewOffset(clampCanvasViewOffset({ x: anchored.x + center.x - startCenter.x, y: anchored.y + center.y - startCenter.y }, nextZoom));
       }
       return;
     }
     if (drag?.type === "view-pan" && drag.pointerId === event.pointerId) {
       setCanvasViewOffset(clampCanvasViewOffset({ x: drag.offset.x + event.clientX - drag.startX, y: drag.offset.y + event.clientY - drag.startY }));
+      return;
+    }
+    if (drag?.type === "shape-draw" && shapeDraftRef.current && event.buttons) {
+      const point = getCanvasPoint(event);
+      setShapeDraftState({ ...shapeDraftRef.current, point, keepSquare: shapeDraftRef.current.keepSquare || event.shiftKey });
+      return;
+    }
+    if (drag?.type === "envelope" && event.buttons && envelopeDragRef.current) {
+      const data = envelopeDragRef.current;
+      const object = findObject(objects, data.id);
+      if (!object) return;
+      const canvasBounds = canvasRef.current.getBoundingClientRect();
+      const centerX = canvasBounds.left + object.x / 100 * canvasBounds.width;
+      const centerY = canvasBounds.top + object.y / 100 * canvasBounds.height;
+      const dx = event.clientX - centerX;
+      const dy = event.clientY - centerY;
+      const radians = -((object.rotation ?? 0) * Math.PI) / 180;
+      const rotatedX = dx * Math.cos(radians) - dy * Math.sin(radians);
+      const rotatedY = dx * Math.sin(radians) + dy * Math.cos(radians);
+      const localPoint = {
+        x: (rotatedX * (object.flipHorizontal ? -1 : 1) / ((object.width ?? 38) / 100 * canvasBounds.width) + 0.5) * 100,
+        y: (rotatedY * (object.flipVertical ? -1 : 1) / ((object.height ?? 38) / 100 * canvasBounds.height) + 0.5) * 100,
+      };
+      const nextEnvelope = envelopePoints.map((point, index) => index === data.index ? localPoint : point);
+      setEnvelopePoints(nextEnvelope);
+      setObjects((current) => updateObjectById(current, data.id, { paths: deformVectorPaths(data.sourcePaths, nextEnvelope) }));
       return;
     }
     if (activeTool === "freehand" && pathDraftRef.current && event.buttons) {
@@ -2403,7 +3065,7 @@ function deletePage(pageId) {
       if (Math.hypot(point.x - last.x, point.y - last.y) >= 0.25) changePathDraft((current) => [...current, point]);
       return;
     }
-    if (activeTool === "pen" && drag?.type === "pen-handle" && drag.pointerId === event.pointerId && event.buttons) {
+    if ((activeTool === "pen" || activeTool === "bezier") && drag?.type === "pen-handle" && drag.pointerId === event.pointerId && event.buttons) {
       const point = getCanvasPoint(event);
       const dx = point.x - drag.start.x;
       const dy = point.y - drag.start.y;
@@ -2439,6 +3101,9 @@ function deletePage(pageId) {
         const target = findObject(current, drag.id);
         const path = target?.paths?.[drag.pathIndex ?? 0];
         if (!path) return current;
+        const anchor = path.nodes[drag.nodeIndex];
+        const nodeOffset = { x: localX - anchor.x, y: localY - anchor.y };
+        const movingNodes = new Set(drag.nodeIndices ?? [drag.nodeIndex]);
         const nodes = path.nodes.map((node, index) => {
           if (index !== drag.nodeIndex) return node;
           if (drag.handle) {
@@ -2446,7 +3111,7 @@ function deletePage(pageId) {
             const other = drag.handle === "in" ? "out" : "in";
             return { ...node, [drag.handle]: handle, ...(node.type === "smooth" ? { [other]: { x: -handle.x, y: -handle.y } } : {}) };
           }
-          const offset = { x: localX - node.x, y: localY - node.y };
+          const offset = nodeOffset;
           return {
             ...node,
             x: localX,
@@ -2455,7 +3120,14 @@ function deletePage(pageId) {
             out: { x: (node.out?.x ?? 0) + offset.x, y: (node.out?.y ?? 0) + offset.y },
           };
         });
-        return updateObjectById(current, drag.id, { paths: target.paths.map((item, index) => index === (drag.pathIndex ?? 0) ? { ...item, nodes } : item) });
+        const adjustedNodes = nodes.map((node, index) => movingNodes.has(index) && index !== drag.nodeIndex ? {
+          ...node,
+          x: node.x + nodeOffset.x,
+          y: node.y + nodeOffset.y,
+          in: { x: (node.in?.x ?? 0) + nodeOffset.x, y: (node.in?.y ?? 0) + nodeOffset.y },
+          out: { x: (node.out?.x ?? 0) + nodeOffset.x, y: (node.out?.y ?? 0) + nodeOffset.y },
+        } : node);
+        return updateObjectById(current, drag.id, { paths: target.paths.map((item, index) => index === (drag.pathIndex ?? 0) ? { ...item, nodes: adjustedNodes } : item) });
       });
       return;
     }
@@ -2466,6 +3138,11 @@ function deletePage(pageId) {
     canvasPointersRef.current.delete(event.pointerId);
     if (canvasPointersRef.current.size < 2) pinchRef.current = null;
     if (dragRef.current?.pointerId != null && dragRef.current.pointerId !== event.pointerId) return;
+    if (dragRef.current?.type === "shape-draw") {
+      finishShapeGesture();
+      dragRef.current = null;
+      return;
+    }
     if (activeTool === "freehand" && pathDraftRef.current) {
       finishDrawing();
       return;
@@ -2503,6 +3180,11 @@ function deletePage(pageId) {
         event.preventDefault();
         return;
       }
+      if (event.key === "Escape" && curveFlyoutOpen) {
+        setCurveFlyoutOpen(false);
+        event.preventDefault();
+        return;
+      }
       if (event.key === "Escape" && pathDraft) {
         event.preventDefault();
         changePathDraft(null);
@@ -2510,15 +3192,30 @@ function deletePage(pageId) {
         setActiveTool("select");
         return;
       }
-      if ((event.key === "Enter" || event.key === " ") && pathDraft && activeTool === "pen") {
+      if ((event.key === "Enter" || event.key === " ") && pathDraft && ["pen", "bezier"].includes(activeTool)) {
         event.preventDefault();
         finishDrawing();
         return;
+      }
+      const typingTarget = event.target.closest("input, textarea, select, [contenteditable='true']");
+      if (editor && !typingTarget && (event.ctrlKey || event.metaKey)) {
+        if (["+", "="].includes(event.key)) { event.preventDefault(); changeCanvasZoom(1.2); return; }
+        if (event.key === "-") { event.preventDefault(); changeCanvasZoom(1 / 1.2); return; }
+        if (event.key === "0") { event.preventDefault(); resetCanvasView(); return; }
+        if (event.key === "1") { event.preventDefault(); zoomCanvasToActualSize(); return; }
+        if (event.shiftKey && event.key.toLowerCase() === "f") { event.preventDefault(); fitSelectionInView(); return; }
+        if (event.shiftKey && event.key.toLowerCase() === "a") { event.preventDefault(); fitDrawingInView(); return; }
       }
       if (pathDraft && (event.key === "Backspace" || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z"))) {
         event.preventDefault();
         changePathDraft((current) => current?.slice(0, -1) ?? null);
         return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        const key = event.key.toLowerCase();
+        if (key === "f10" && selectedObject?.shape === "custom" && !selectedObject.svgPathData) { setActiveTool("node"); setSelectedNodeIndex(null); setSelectedNodeIndices([]); return; }
+        if (key === "f5") { setActiveTool("freehand"); changePathDraft(null); return; }
+        if (key === "h") { setActiveTool((current) => current === "pan" ? "select" : "pan"); return; }
       }
       if (event.key === "Delete" && selectedIds.length) {
         event.preventDefault();
@@ -2716,7 +3413,7 @@ function deletePage(pageId) {
     const canvasBounds = canvasRef.current.getBoundingClientRect();
     const objectCenterX = objectBounds.left + objectBounds.width / 2;
     const objectCenterY = objectBounds.top + objectBounds.height / 2;
-    const isVectorShape = object.type === "shape" && (object.shape === "custom" || islamicShapes.some((shape) => shape.id === object.shape));
+    const isVectorShape = object.type === "shape" && (object.shape === "custom" || primitiveVectorShapes.includes(object.shape) || islamicShapes.some((shape) => shape.id === object.shape));
     const isShape = object.type === "shape";
     const shapeWidth = objectElement.offsetWidth;
     const shapeHeight = objectElement.offsetHeight;
@@ -2828,7 +3525,11 @@ function deletePage(pageId) {
     saveHistory();
     selectObject(object.id);
     setSelectedNodeIndex(nodeIndex);
-    dragRef.current = { type: "node", id: object.id, pathIndex, nodeIndex, handle };
+    const nodeIndices = !handle && event.shiftKey && selectedNodeIndices.includes(nodeIndex)
+      ? selectedNodeIndices
+      : !handle && event.shiftKey ? [...selectedNodeIndices, nodeIndex] : [nodeIndex];
+    setSelectedNodeIndices(nodeIndices);
+    dragRef.current = { type: "node", id: object.id, pathIndex, nodeIndex, nodeIndices, handle };
   }
 
   function dragObject(event) {
@@ -3572,7 +4273,7 @@ function deletePage(pageId) {
       image.src = object.imageFillSrc;
     }));
     const fontLoads = outputObjects.filter((object) => object.type === "text").map((object) => {
-      const font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${object.fontFamily ?? "Arial, sans-serif"}`;
+      const font = `${object.italic ? "italic " : ""}${object.fontWeight ?? (object.bold ? 700 : 400)} ${object.fontSize * scaleX}px ${resolveTextFontFamily(object.fontFamily)}`;
       return document.fonts.load(font, object.text).catch(() => []);
     });
 
@@ -3638,18 +4339,36 @@ function deletePage(pageId) {
             }
             if (object.fillEnabled !== false) {
               context.fillStyle = object.color ?? "#d5ad62";
-              context.globalAlpha *= object.svgImported ? object.fillOpacity ?? 1 : 1;
+              context.globalAlpha = (object.opacity ?? 100) / 100 * (object.svgImported ? object.fillOpacity ?? 1 : (object.fillOpacity ?? 100) / 100);
               context.fill(path, object.fillRule ?? "evenodd");
-              context.globalAlpha = 1;
             }
             if (object.strokeEnabled) {
               context.strokeStyle = object.strokeColor ?? object.color ?? "#17352c";
-              context.globalAlpha = object.svgImported ? object.strokeOpacity ?? 1 : 1;
+              context.globalAlpha = (object.opacity ?? 100) / 100 * (object.svgImported ? object.strokeOpacity ?? 1 : (object.strokeOpacity ?? 100) / 100);
               context.lineWidth = object.svgImported ? object.strokeWidth ?? 1 : (object.strokeWidth ?? 1) * 100 / Math.max(width, height);
               context.lineCap = object.strokeLineCap ?? "butt";
               context.lineJoin = object.strokeLineJoin ?? "miter";
               context.stroke(path);
-              context.globalAlpha = 1;
+            }
+          } else if (primitiveVectorShapes.includes(object.shape)) {
+            const width = ((object.width ?? 38) / 100) * output.width;
+            const height = ((object.height ?? 38) / 100) * output.height;
+            context.translate(-width / 2, -height / 2);
+            context.scale(width / 100, height / 100);
+            let path;
+            if (object.shape === "rectangle") path = new Path2D("M0 0 H100 V100 H0 Z");
+            else if (object.shape === "ellipse") path = new Path2D("M50 1 A49 49 0 1 1 49.999 1 Z");
+            else path = new Path2D(`M ${regularPolygonPoints(object.sides).map((point) => `${point.x} ${point.y}`).join(" L ")} Z`);
+            if (object.fillEnabled !== false) {
+              context.fillStyle = object.color ?? "#d5ad62";
+              context.globalAlpha = (object.opacity ?? 100) / 100 * (object.fillOpacity ?? 100) / 100;
+              context.fill(path);
+            }
+            if (object.strokeEnabled) {
+              context.strokeStyle = object.strokeColor ?? "#17352c";
+              context.globalAlpha = (object.opacity ?? 100) / 100 * (object.strokeOpacity ?? 100) / 100;
+              context.lineWidth = (object.strokeWidth ?? 2) * 100 / Math.max(width, height);
+              context.stroke(path);
             }
           } else if (vectorShape) {
             const loaded = loadedImages.find((item) => item?.object.id === object.id);
@@ -3659,6 +4378,7 @@ function deletePage(pageId) {
               context.drawImage(loaded.image, -width / 2, -height / 2, width, height);
             }
           } else {
+            context.globalAlpha = (object.opacity ?? 100) / 100;
             context.fillStyle = object.color;
             const width = (object.width ?? 140) * scaleX;
             const height = (object.height ?? 16) * scaleY;
@@ -3859,7 +4579,7 @@ function deletePage(pageId) {
   }
 
   function renderCanvasObject(object, interactive) {
-    const vectorShape = object.type === "shape" && (object.shape === "custom" || islamicShapes.some((shape) => shape.id === object.shape));
+    const vectorShape = object.type === "shape" && (object.shape === "custom" || primitiveVectorShapes.includes(object.shape) || islamicShapes.some((shape) => shape.id === object.shape));
     const imageCrop = object.type === "image" && object.crop ? normalizeCropRect(object.crop) : null;
     const imageAspectRatio = imageCrop
       ? getCroppedImageAspectRatio(imageCrop, object.naturalWidth ?? 1, object.naturalHeight ?? 1)
@@ -3887,7 +4607,7 @@ function deletePage(pageId) {
           transform: `translate(-50%, -50%) rotate(${object.rotation ?? 0}deg)`,
         }}
         onPointerDown={interactive && object.type !== "group" ? (event) => moveObject(event, object) : undefined}
-        onClick={interactive && object.type !== "group" && ["select", "multi", "node"].includes(activeTool) ? (event) => {
+        onClick={interactive && object.type !== "group" && ["select", "multi", "node", "envelope"].includes(activeTool) ? (event) => {
           event.stopPropagation();
           const targetId = object.groupId && !groupEditMode ? object.groupId : object.id;
           if (event.shiftKey || event.ctrlKey || event.metaKey || activeTool === "multi") selectObject(targetId, true);
@@ -3915,12 +4635,18 @@ function deletePage(pageId) {
             <feMerge>{object.imageShadowEnabled && <feMergeNode in="image-outer-shadow" />}{object.imageOutlineEnabled && <feMergeNode in="image-outline" />}<feMergeNode in="SourceGraphic" />{object.imageInnerShadowEnabled && <feMergeNode in="image-inner-shadow" />}</feMerge>
           </filter></defs></svg>}
           {object.type === "text" && <span className="canvas-text" data-object-id={object.id} dir={object.direction ?? "auto"} style={getTextTypographyStyle(object)}>
+            <span className="canvas-text-layer canvas-text-shadow" dir={object.direction ?? "auto"} aria-hidden="true" style={getTextShadowPreviewStyle(object)}>{object.text}</span>
             <span className="canvas-text-layer canvas-text-outline" dir={object.direction ?? "auto"} aria-hidden="true" style={getTextStrokeStyle(object)}>{object.text}</span>
-            <span className="canvas-text-layer canvas-text-fill" dir={object.direction ?? "auto"} style={{ ...getTextPreviewStyle({ ...object, strokeEnabled: false, opacity: 100 }), WebkitTextStroke: "0 transparent", paintOrder: "normal", filter: object.innerShadowEnabled ? `url(#text-inner-${effectId})` : undefined }}>{object.text}</span>
+            <span className="canvas-text-layer canvas-text-fill" dir={object.direction ?? "auto"} style={{ ...getTextPreviewStyle({ ...object, strokeEnabled: false, shadowEnabled: false, glowEnabled: false, opacity: 100 }), WebkitTextStroke: "0 transparent", paintOrder: "normal", filter: object.innerShadowEnabled ? `url(#text-inner-${effectId})` : undefined }}>{object.text}</span>
           </span>}
-          {vectorShape && <ShapeArtwork shape={object.shape} color={object.color} className="canvas-vector-shape" />}
+          {vectorShape && primitiveVectorShapes.includes(object.shape) && <svg className="canvas-vector-shape canvas-primitive-vector" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {object.shape === "rectangle" && <rect x="0" y="0" width="100" height="100" fill={object.fillEnabled === false ? "none" : object.color} fillOpacity={(object.fillOpacity ?? 100) / 100} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={(object.strokeOpacity ?? 100) / 100} strokeWidth={object.strokeWidth ?? 2} vectorEffect="non-scaling-stroke" />}
+            {object.shape === "ellipse" && <ellipse cx="50" cy="50" rx="49" ry="49" fill={object.fillEnabled === false ? "none" : object.color} fillOpacity={(object.fillOpacity ?? 100) / 100} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={(object.strokeOpacity ?? 100) / 100} strokeWidth={object.strokeWidth ?? 2} vectorEffect="non-scaling-stroke" />}
+            {object.shape === "polygon" && <polygon points={regularPolygonPoints(object.sides).map((point) => `${point.x},${point.y}`).join(" ")} fill={object.fillEnabled === false ? "none" : object.color} fillOpacity={(object.fillOpacity ?? 100) / 100} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={(object.strokeOpacity ?? 100) / 100} strokeWidth={object.strokeWidth ?? 2} vectorEffect="non-scaling-stroke" />}
+          </svg>}
+          {vectorShape && !primitiveVectorShapes.includes(object.shape) && <ShapeArtwork shape={object.shape} color={object.color} className="canvas-vector-shape" />}
           {object.shape === "custom" && <svg className="canvas-vector-shape canvas-custom-vector" viewBox={(object.svgViewBox ?? [0, 0, 100, 100]).join(" ")} preserveAspectRatio="none">
-            <path d={object.svgPathData ?? pathToSvg(object.paths ?? [])} transform={object.svgTransform ? `matrix(${object.svgTransform.join(" ")})` : undefined} fill={object.fillEnabled === false ? "none" : object.color ?? "#d5ad62"} fillOpacity={object.svgImported ? object.fillOpacity : undefined} fillRule={object.fillRule ?? "evenodd"} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={object.svgImported ? object.strokeOpacity : undefined} strokeWidth={object.strokeWidth ?? 1} strokeLinecap={object.strokeLineCap} strokeLinejoin={object.strokeLineJoin} vectorEffect={object.svgImported ? "none" : "non-scaling-stroke"} />
+            <path d={object.svgPathData ?? pathToSvg(object.paths ?? [])} transform={object.svgTransform ? `matrix(${object.svgTransform.join(" ")})` : undefined} fill={object.fillEnabled === false ? "none" : object.color ?? "#d5ad62"} fillOpacity={object.svgImported ? object.fillOpacity : (object.fillOpacity ?? 100) / 100} fillRule={object.fillRule ?? "evenodd"} stroke={object.strokeEnabled ? object.strokeColor ?? "#17352c" : "none"} strokeOpacity={object.svgImported ? object.strokeOpacity : (object.strokeOpacity ?? 100) / 100} strokeWidth={object.strokeWidth ?? 1} strokeLinecap={object.strokeLineCap} strokeLinejoin={object.strokeLineJoin} vectorEffect={object.svgImported ? "none" : "non-scaling-stroke"} />
           </svg>}
           {object.type === "shape" && !vectorShape && <span className={`canvas-shape shape-${object.shape ?? "line"}`} style={{ width: `${object.width ?? 140}px`, height: `${object.height ?? 16}px`, backgroundColor: object.shape === "circle-outline" ? "transparent" : object.color, borderColor: object.color }} />}
           {object.type === "image" && (imageCrop ? <div className="canvas-image-viewport" style={{ aspectRatio: imageAspectRatio }}>
@@ -3944,14 +4670,27 @@ function deletePage(pageId) {
           {(object.paths ?? []).map((path, pathIndex) => path.nodes.map((node, nodeIndex) => <g key={`${pathIndex}-${nodeIndex}`}>
             {node.out && (node.out.x || node.out.y) && <><line x1={node.x} y1={node.y} x2={node.x + node.out.x} y2={node.y + node.out.y} /><circle className="vector-node-handle" cx={node.x + node.out.x} cy={node.y + node.out.y} r="2" onPointerDown={(event) => beginNodeDrag(event, object, pathIndex, nodeIndex, "out")} /></>}
             {node.in && (node.in.x || node.in.y) && <><line x1={node.x} y1={node.y} x2={node.x + node.in.x} y2={node.y + node.in.y} /><circle className="vector-node-handle" cx={node.x + node.in.x} cy={node.y + node.in.y} r="2" onPointerDown={(event) => beginNodeDrag(event, object, pathIndex, nodeIndex, "in")} /></>}
-            <circle className={`vector-node${selectedNodeIndex === nodeIndex ? " is-active" : ""}`} cx={node.x} cy={node.y} r="2.5" onPointerDown={(event) => beginNodeDrag(event, object, pathIndex, nodeIndex)} />
+            <circle className={`vector-node${selectedNodeIndices.includes(nodeIndex) || selectedNodeIndex === nodeIndex ? " is-active" : ""}`} cx={node.x} cy={node.y} r="2.5" onPointerDown={(event) => beginNodeDrag(event, object, pathIndex, nodeIndex)} />
           </g>))}
+        </svg>}
+        {interactive && selected && object.shape === "custom" && activeTool === "envelope" && envelopePoints && <svg className="envelope-node-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ transform: `scale(${object.flipHorizontal ? -1 : 1}, ${object.flipVertical ? -1 : 1})` }}>
+          <polygon points={envelopePoints.map((point) => `${point.x},${point.y}`).join(" ")} />
+          {envelopePoints.map((point, index) => <circle key={index} className="envelope-node" cx={point.x} cy={point.y} r="3" aria-label={`Envelope corner ${index + 1}`} onPointerDown={(event) => beginEnvelopeHandle(event, object, index)} />)}
         </svg>}
       </div>
     );
   }
 
   const renderableObjects = flattenGroups(objects);
+  const shapeDraftBounds = shapeDraft ? {
+    x: Math.min(shapeDraft.start.x, shapeDraft.point.x),
+    y: Math.min(shapeDraft.start.y, shapeDraft.point.y),
+    width: Math.abs(shapeDraft.point.x - shapeDraft.start.x),
+    height: Math.abs(shapeDraft.point.y - shapeDraft.start.y),
+  } : null;
+  const polygonDraftPoints = shapeDraftBounds?.width && shapeDraftBounds?.height
+    ? regularPolygonPoints(polygonSides).map((point) => `${shapeDraftBounds.x + point.x / 100 * shapeDraftBounds.width},${shapeDraftBounds.y + point.y / 100 * shapeDraftBounds.height}`).join(" ")
+    : "";
 
   if (editor) {
     return (
@@ -3995,14 +4734,18 @@ function deletePage(pageId) {
             <details id="editor-menu-vector" className="editor-menu" open={openEditorMenuId === "editor-menu-vector"} onClick={closeEditorMenuAfterAction}>
               <summary title="Draw, edit nodes and combine vector shapes" onClick={toggleEditorMenu}><span>⌘</span>Vector</summary>
               <div className="editor-menu-panel editor-menu-panel-wide vector-menu-panel">
+                {renderColorPalette(true)}
                 <div className="vector-tool-row">
                   <button type="button" className={activeTool === "select" ? "is-current" : ""} onClick={() => { setActiveTool("select"); changePathDraft(null); }}>Select</button>
                   <button type="button" className={activeTool === "multi" ? "is-current" : ""} onClick={() => { setActiveTool("multi"); changePathDraft(null); }}>Multi-select</button>
                   <button type="button" className={activeTool === "freehand" ? "is-current" : ""} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}>Freehand</button>
-                  <button type="button" className={activeTool === "pen" ? "is-current" : ""} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}>Pen / Bezier</button>
-                  <button type="button" disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} className={activeTool === "node" ? "is-current" : ""} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}>Node edit</button>
+                  <button type="button" className={activeTool === "bezier" ? "is-current" : ""} onClick={() => { setActiveTool("bezier"); changePathDraft(null); }}>Bézier</button>
+                  <button type="button" className={activeTool === "pen" ? "is-current" : ""} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}>Pen</button>
+                  <button type="button" disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} className={activeTool === "node" ? "is-current" : ""} title={selectedObject?.shape === "custom" ? "Edit custom vector nodes" : "Convert a rectangle, ellipse, or polygon to curves first"} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}>Shape / Node</button>
+                  {primitiveVectorShapes.map((tool) => <button key={tool} type="button" className={activeTool === tool ? "is-current" : ""} onClick={() => { setActiveTool(tool); setShapeDraftState(null); }}>{tool[0].toUpperCase() + tool.slice(1)}</button>)}
+                  {(["contour", "blend", "envelope", "knife"]).map((tool) => <button key={tool} type="button" className={activeTool === tool ? "is-current" : ""} disabled={tool === "envelope" && selectedObject?.shape !== "custom"} onClick={() => tool === "envelope" ? activateEnvelopeTool() : setActiveTool(tool)}>{tool[0].toUpperCase() + tool.slice(1)}</button>)}
                 </div>
-                {(activeTool === "freehand" || activeTool === "pen") && <>
+                {(activeTool === "freehand" || activeTool === "pen" || activeTool === "bezier") && <>
                   <label className="effect-toggle"><input type="checkbox" checked={closedDrawing} onChange={(event) => setClosedDrawing(event.target.checked)} />Close freehand paths</label>
                   <label className="editor-menu-color"><span>Fill</span><input aria-label="Vector fill color" type="color" value={vectorFill} onChange={(event) => setVectorFill(event.target.value)} /></label>
                   <label className="editor-menu-color"><span>Stroke</span><input aria-label="Vector stroke color" type="color" value={vectorStroke} onChange={(event) => setVectorStroke(event.target.value)} /></label>
@@ -4011,8 +4754,22 @@ function deletePage(pageId) {
                   <label className="effect-toggle"><input type="checkbox" checked={fillEnabled} onChange={(event) => setFillEnabled(event.target.checked)} />Enable fill</label>
                   <label className="effect-toggle"><input type="checkbox" checked={strokeEnabled} onChange={(event) => setStrokeEnabled(event.target.checked)} />Enable stroke</label>
                 </>}
+                {activeTool === "polygon" && <label className="vector-stroke-control">Polygon sides<input aria-label="Polygon sides" type="number" min="3" max="32" step="1" value={polygonSides} onChange={(event) => setPolygonSides(Math.max(3, Math.min(32, Number(event.target.value) || 3)))} /></label>}
+                {activeTool === "contour" && <>
+                  <label className="vector-stroke-control">Contour distance<input aria-label="Contour distance" type="number" min="1" max="200" step="1" value={contourDistance} onChange={(event) => setContourDistance(Math.max(1, Math.min(200, Number(event.target.value) || 1)))} /></label>
+                  <label className="vector-stroke-control">Contour steps<input aria-label="Contour steps" type="number" min="1" max="10" step="1" value={contourSteps} onChange={(event) => setContourSteps(Math.max(1, Math.min(10, Number(event.target.value) || 1)))} /></label>
+                  <label className="vector-stroke-control">Direction<select aria-label="Contour direction" value={contourDirection} onChange={(event) => setContourDirection(event.target.value)}><option value="outward">Outward</option><option value="inward">Inward</option></select></label>
+                  <button type="button" disabled={selectedIds.length !== 1 || selectedObject?.type !== "shape"} onClick={createContours}>Create Contour</button>
+                </>}
+                {activeTool === "blend" && <>
+                  <label className="vector-stroke-control">Blend steps<input aria-label="Blend steps" type="number" min="1" max="64" step="1" value={blendSteps} onChange={(event) => setBlendSteps(Math.max(1, Math.min(64, Number(event.target.value) || 1)))} /></label>
+                  <button type="button" disabled={selectedIds.length !== 2} onClick={createBlend}>Create Blend</button>
+                </>}
+                {activeTool === "knife" && <p className="vector-draft-status">Select closed vector shapes, then drag a line across them to split.</p>}
+                {activeTool === "envelope" && <p className="vector-draft-status">Drag any of the four envelope corner handles to deform the selected custom vector.</p>}
+                {selectedObject && primitiveVectorShapes.includes(selectedObject.shape) && <button type="button" onClick={convertSelectedToCurves}>Convert to Curves</button>}
                 {pathDraft && <>
-                  <span className="vector-draft-status">{pathDraft.length} nodes · {activeTool === "pen" ? "Click-drag curves; Enter finish; Esc cancel" : "Release pointer to finish"}</span>
+                  <span className="vector-draft-status">{pathDraft.length} nodes · {activeTool === "freehand" ? "Release pointer to finish" : activeTool === "bezier" ? "Click adds smooth segments; Enter finishes; Esc cancels" : "Click-drag curves; Enter finishes; Esc cancels"}</span>
                   <div className="editor-menu-actions"><button type="button" onClick={() => finishDrawing()}>Finish path</button><button type="button" onClick={() => { changePathDraft(null); setActiveTool("select"); }}>Cancel</button></div>
                 </>}
                 <label className="vector-draft-status">{selectedIds.length} object{selectedIds.length === 1 ? "" : "s"} selected</label>
@@ -4031,18 +4788,27 @@ function deletePage(pageId) {
                   }
                 }}>{groupEditMode ? "Exit group editing" : "Edit group contents"}</button>}
                 <div className="editor-menu-actions">
-                  <button type="button" disabled={selectedIds.length < 2} onClick={() => performBoolean("union")}>Weld</button>
-                  <button type="button" disabled={selectedIds.length < 2} onClick={() => performBoolean("difference", keepTrimCutter)}>Trim</button>
-                  <button type="button" disabled={selectedIds.length < 2} onClick={() => performBoolean("intersection")}>Intersect</button>
+                  <button type="button" title="Merge selected shapes into one editable outline; images use Image Weld" disabled={!selectedBooleanOperationEnabled} onClick={() => performBoolean("union")}>Weld</button>
+                  <button type="button" disabled={!selectedBooleanOperationEnabled} title="Subtract the frontmost selected shape from shapes behind it" onClick={() => performBoolean("difference", keepTrimCutter)}>Trim</button>
+                  <button type="button" disabled={!selectedBooleanOperationEnabled} onClick={() => performBoolean("intersection")}>Intersect</button>
+                  <button type="button" title="Keep selected vector contours separate inside one editable object" disabled={!selectedVectorOperationEnabled} onClick={() => performBoolean("combine")}>Combine</button>
                 </div>
-                <label className="effect-toggle"><input type="checkbox" checked={trimTopIsCutter} onChange={(event) => setTrimTopIsCutter(event.target.checked)} />Use top layer as Trim cutter</label>
+                <button type="button" disabled={!canBreakApartSelectedVector} onClick={breakApartSelectedVector}>Break Apart</button>
+                <label className="effect-toggle" title="Layers are ordered back to front. When checked, the frontmost selected object cuts the objects behind it."><input type="checkbox" checked={trimTopIsCutter} onChange={(event) => setTrimTopIsCutter(event.target.checked)} />Use top layer as Trim cutter</label>
                 <label className="effect-toggle"><input type="checkbox" checked={keepTrimCutter} onChange={(event) => setKeepTrimCutter(event.target.checked)} />Keep cutter after Trim</label>
                 {selectedObject?.shape === "custom" && <>
+                  <button type="button" onClick={downloadSelectedVectorSvg}>Export selected vector as editable SVG</button>
                   <div className="editor-menu-actions">
                     <button type="button" onClick={addNodeToSelectedPath}>Add node</button>
-                    <button type="button" disabled={selectedNodeIndex == null} onClick={removeSelectedNode}>Delete node</button>
+                    <button type="button" disabled={!selectedNodeIndices.length && selectedNodeIndex == null} onClick={removeSelectedNode}>Delete node</button>
+                    <button type="button" onClick={selectAllPathNodes}>Select all nodes</button>
                   </div>
-                  <button type="button" disabled={selectedNodeIndex == null} onClick={toggleSelectedNodeType}>Toggle corner / smooth</button>
+                  <div className="editor-menu-actions" aria-label="Selected node type">
+                    <button type="button" disabled={selectedNodeIndex == null} onClick={() => setSelectedNodeType("cusp")}>Cusp</button>
+                    <button type="button" disabled={selectedNodeIndex == null} onClick={() => setSelectedNodeType("smooth")}>Smooth</button>
+                    <button type="button" disabled={selectedNodeIndex == null} onClick={() => setSelectedNodeType("symmetrical")}>Symmetrical</button>
+                    <button type="button" disabled={selectedNodeIndex == null} onClick={toggleSelectedNodeCurve}>Straight / curve</button>
+                  </div>
                 </>}
                 {vectorMessage && <p className="vector-message" role="status">{vectorMessage}</p>}
               </div>
@@ -4135,6 +4901,7 @@ function deletePage(pageId) {
               <div className="editor-menu-panel">
                 <button type="button" onClick={() => openMobileProperty("background")}>Page Setup</button>
                 <button type="button" className="mobile-only-action" onClick={() => setFlowerPickerOpen(true)}>Flower Gallery</button>
+                <button type="button" className="mobile-only-action" onClick={() => { window.setTimeout(() => setOpenEditorMenuId("editor-menu-vector"), 0); }}>Open Vector Drawing Tools</button>
                 {objects.length > 0 && <button type="button" onClick={() => openMobileProperty("arrange")}>Arrange & Layers</button>}
                 {selectedObject && <button type="button" onClick={() => openMobileProperty("selected")}>Selected Object Properties</button>}
                 <button type="button" onClick={() => setSnapGridEnabled((enabled) => !enabled)}>{snapGridEnabled ? "Grid snapping: On" : "Grid snapping: Off"}</button>
@@ -4221,6 +4988,51 @@ function deletePage(pageId) {
             <button type="button" className="page-setup-action" title="Document size, units, print resolution, and background" onClick={() => { setBackgroundPanelOpen(true); setDocumentSizeOpen(true); }}><span aria-hidden="true">⚙</span><span className="command-label">Page Setup</span><small>{canvasSize === "Custom" ? `${formatUnitValue(dimensions.width, sizeUnit)} × ${formatUnitValue(dimensions.height, sizeUnit)} ${sizeUnit}` : canvasSize} · {printDpi} DPI</small></button>
           </div>
           <div className="editor-context-toolbar" role="group" aria-label="Contextual properties">
+            {selectedIds.length > 1 && <>
+              <span className="context-object-label">Vector operations</span>
+              <button type="button" disabled={!selectedBooleanOperationEnabled} title="Merge selected shapes into one outline" onClick={() => performBoolean("union")}>Weld</button>
+              <button type="button" disabled={!selectedBooleanOperationEnabled} title="Subtract the cutter from the target; layer order controls the cutter" onClick={() => performBoolean("difference", keepTrimCutter)}>Trim</button>
+              <button type="button" disabled={!selectedBooleanOperationEnabled} title="Keep only overlapping areas" onClick={() => performBoolean("intersection")}>Intersect</button>
+              <button type="button" disabled={!selectedVectorOperationEnabled} title="Keep contours separate inside one editable object" onClick={() => performBoolean("combine")}>Combine</button>
+            </>}
+            {canBreakApartSelectedVector && <button type="button" onClick={breakApartSelectedVector}>Break Apart</button>}
+            {(["freehand", "pen", "bezier"].includes(activeTool)) && <>
+              <span className="context-object-label">{activeTool === "bezier" ? "Bézier" : activeTool === "pen" ? "Pen" : "Freehand"}</span>
+              <label className="context-color" title="Vector fill"><span aria-hidden="true">◐</span><input type="color" aria-label="Vector fill color" value={vectorFill} onChange={(event) => setVectorFill(event.target.value)} /></label>
+              <label className="context-color" title="Vector outline"><span aria-hidden="true">◉</span><input type="color" aria-label="Vector outline color" value={vectorStroke} onChange={(event) => setVectorStroke(event.target.value)} /></label>
+              <label title="Vector outline width">Outline<input aria-label="Vector outline width" type="number" min="0.5" max="12" step="0.5" value={vectorStrokeWidth} onChange={(event) => setVectorStrokeWidth(Number(event.target.value))} /><small>px</small></label>
+              {pathDraft && <><button type="button" onClick={() => finishDrawing()}>Finish path</button><button type="button" onClick={() => { changePathDraft(null); setActiveTool("select"); }}>Cancel</button></>}
+            </>}
+            {activeTool === "node" && selectedObject?.shape === "custom" && <>
+              <span className="context-object-label">Node editing</span>
+              <button type="button" onClick={selectAllPathNodes}>Select all nodes</button>
+              <button type="button" disabled={selectedNodeIndex == null} onClick={addNodeToSelectedPath}>Add node</button>
+              <button type="button" disabled={selectedNodeIndex == null} onClick={removeSelectedNode}>Delete node</button>
+              <select aria-label="Node type" disabled={selectedNodeIndex == null} value={selectedObject.paths?.[0]?.nodes?.[selectedNodeIndex]?.type === "symmetrical" ? "symmetrical" : selectedObject.paths?.[0]?.nodes?.[selectedNodeIndex]?.type === "smooth" ? "smooth" : "cusp"} onChange={(event) => setSelectedNodeType(event.target.value)}><option value="cusp">Cusp</option><option value="smooth">Smooth</option><option value="symmetrical">Symmetrical</option></select>
+              <button type="button" disabled={selectedNodeIndex == null} onClick={toggleSelectedNodeCurve}>Straight / curve</button>
+            </>}
+            {primitiveVectorShapes.includes(activeTool) && <>
+              <span className="context-object-label">Draw {activeTool}</span>
+              <label className="context-color" title="Shape fill"><span aria-hidden="true">◐</span><input type="color" aria-label="Drawing fill color" value={vectorFill} onChange={(event) => setVectorFill(event.target.value)} /></label>
+              <label className="context-color" title="Shape outline"><span aria-hidden="true">◉</span><input type="color" aria-label="Drawing outline color" value={vectorStroke} onChange={(event) => setVectorStroke(event.target.value)} /></label>
+              <label title="Outline width">Outline<input aria-label="Drawing outline width" type="number" min="0.5" max="12" step="0.5" value={vectorStrokeWidth} onChange={(event) => setVectorStrokeWidth(Number(event.target.value))} /><small>px</small></label>
+              {activeTool === "polygon" && <label title="Regular polygon sides">Sides<input aria-label="Polygon sides" type="number" min="3" max="32" value={polygonSides} onChange={(event) => setPolygonSides(Math.max(3, Math.min(32, Number(event.target.value) || 3)))} /></label>}
+            </>}
+            {activeTool === "contour" && <>
+              <span className="context-object-label">Contour</span>
+              <label title="Offset distance">Distance<input aria-label="Contour distance" type="number" min="1" max="200" value={contourDistance} onChange={(event) => setContourDistance(Math.max(1, Math.min(200, Number(event.target.value) || 1)))} /><small>px</small></label>
+              <label title="Contour steps">Steps<input aria-label="Contour steps" type="number" min="1" max="10" value={contourSteps} onChange={(event) => setContourSteps(Math.max(1, Math.min(10, Number(event.target.value) || 1)))} /></label>
+              <select aria-label="Contour direction" value={contourDirection} onChange={(event) => setContourDirection(event.target.value)}><option value="outward">Outward</option><option value="inward">Inward</option></select>
+              <button type="button" disabled={selectedIds.length !== 1 || selectedObject?.type !== "shape"} onClick={createContours}>Create Contour</button>
+            </>}
+            {activeTool === "blend" && <>
+              <span className="context-object-label">Blend</span>
+              <label title="Blend steps">Steps<input aria-label="Blend steps" type="number" min="1" max="64" value={blendSteps} onChange={(event) => setBlendSteps(Math.max(1, Math.min(64, Number(event.target.value) || 1)))} /></label>
+              <button type="button" disabled={selectedIds.length !== 2} onClick={createBlend}>Create Blend</button>
+            </>}
+            {activeTool === "envelope" && selectedObject?.shape === "custom" && <span className="context-object-label">Drag the four corner handles to deform the vector</span>}
+            {selectedObject && primitiveVectorShapes.includes(selectedObject.shape) && <button type="button" title="Convert the selected primitive to editable path nodes" onClick={convertSelectedToCurves}>Convert to Curves</button>}
+            {selectedObject?.shape === "custom" && activeTool !== "envelope" && <button type="button" title="Deform this custom vector with four envelope corners" onClick={activateEnvelopeTool}>Envelope</button>}
             {selectedObject ? <>
               <span className="context-object-label">{selectedIds.length > 1 ? `${selectedIds.length} objects` : `${selectedObject.type} selected`}</span>
               {selectedIds.length === 1 && <>
@@ -4258,25 +5070,38 @@ function deletePage(pageId) {
 
         <div className={`editor-workspace${desktopPropertiesCollapsed ? " is-properties-collapsed" : ""}`}>
           <aside className="editor-toolbox" aria-label="Drawing and editing tools">
-            <span className="toolbox-section-label">SELECT</span>
-            <button type="button" className={activeTool === "select" ? "is-current" : ""} title="Pick / Select (V)" aria-label="Pick / Select tool" aria-pressed={activeTool === "select"} onClick={() => { setActiveTool("select"); changePathDraft(null); }}><span>↖</span></button>
-            <button type="button" className={activeTool === "multi" ? "is-current" : ""} title="Multi-select (Shift)" aria-label="Multi-select tool" aria-pressed={activeTool === "multi"} onClick={() => { setActiveTool("multi"); changePathDraft(null); }}><span>⌖</span></button>
-            <button type="button" className={activeTool === "node" ? "is-current" : ""} title="Shape / Node edit" aria-label="Shape node editing tool" aria-pressed={activeTool === "node"} disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}><span>◇</span></button>
-            <button type="button" title="Crop selected image" aria-label="Crop selected image" disabled={selectedObject?.type !== "image"} onClick={beginImageCrop}><span>◩</span></button>
+            <span className="toolbox-section-label">EDIT</span>
+            <button type="button" className={activeTool === "select" ? "is-current" : ""} title="Pick / Selection — select and transform objects" aria-label="Pick / Selection tool" aria-pressed={activeTool === "select"} onClick={() => { setActiveTool("select"); changePathDraft(null); }}><span>↖</span></button>
+            <button type="button" className={activeTool === "node" ? "is-current" : ""} title={selectedObject?.shape === "custom" ? "Shape / Node — edit selected vector nodes (F10)" : "Convert a rectangle, ellipse, or polygon to curves before node editing"} aria-label="Shape / Node editing tool" aria-pressed={activeTool === "node"} disabled={selectedObject?.shape !== "custom" || Boolean(selectedObject?.svgPathData)} onClick={() => { setActiveTool("node"); setSelectedNodeIndex(null); }}><span>◇</span></button>
+            <button type="button" title="Crop — edit the selected image crop" aria-label="Crop selected image" disabled={selectedObject?.type !== "image"} onClick={beginImageCrop}><span>◉</span></button>
+            <button type="button" className={activeTool === "pan" ? "is-current" : ""} title="Pan canvas — drag to reposition the page (H)" aria-label="Pan tool" aria-pressed={activeTool === "pan"} onClick={() => setActiveTool(activeTool === "pan" ? "select" : "pan")}><span>✋</span></button>
+            <button type="button" className={activeTool === "zoom" ? "is-current" : ""} title="Zoom tool — click canvas to zoom in; Shift-click to zoom out" aria-label="Zoom tool" aria-pressed={activeTool === "zoom"} onClick={() => setActiveTool(activeTool === "zoom" ? "select" : "zoom")}><span>⌕</span></button>
             <span className="toolbox-divider" />
-            <span className="toolbox-section-label">DRAW</span>
+            <span className="toolbox-section-label">CURVES</span>
+            <button type="button" className={activeTool === "freehand" ? "is-current" : ""} title="Freehand — draw a vector path by dragging (F5)" aria-label="Freehand tool" aria-pressed={activeTool === "freehand"} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}><span>〰</span></button>
+            <button type="button" className={activeTool === "pen" ? "is-current" : ""} title="Pen — click for corners or drag for handles" aria-label="Pen tool" aria-pressed={activeTool === "pen"} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}><span>⌁</span></button>
+            <button type="button" className={activeTool === "bezier" ? "is-current" : ""} title="Bézier — draw smooth editable curve segments" aria-label="Bézier tool" aria-pressed={activeTool === "bezier"} onClick={() => { setActiveTool("bezier"); changePathDraft(null); }}><span>⌠</span></button>
+            <span className="toolbox-divider" />
+            <span className="toolbox-section-label">SHAPES</span>
+            {[{ id: "rectangle", label: "Rectangle", glyph: "▱" }, { id: "ellipse", label: "Ellipse", glyph: "◯" }, { id: "polygon", label: "Polygon", glyph: "⬡" }].map((tool) => <button key={tool.id} type="button" className={activeTool === tool.id ? "is-current" : ""} title={`${tool.label} — drag on canvas to draw`} aria-label={`${tool.label} tool`} aria-pressed={activeTool === tool.id} onClick={() => { setActiveTool(tool.id); setShapeDraftState(null); }}><span>{tool.glyph}</span></button>)}
+            <span className="toolbox-divider" />
+            <span className="toolbox-section-label">ADVANCED</span>
+            <div className="toolbox-flyout-anchor">
+              <button type="button" className={["contour", "blend", "envelope", "knife"].includes(activeTool) ? "is-current" : ""} title="Advanced vector tools — contour, blend, envelope, knife" aria-label="Open advanced vector tools" aria-expanded={advancedFlyoutOpen} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setAdvancedFlyoutPosition({ top: Math.max(8, Math.min(rect.top, window.innerHeight - 180)), left: rect.right + 6 }); setAdvancedFlyoutOpen((open) => !open); }}><span>✣</span><i aria-hidden="true">▸</i></button>
+              {advancedFlyoutOpen && <div className="toolbox-flyout advanced-toolbox-flyout" style={advancedFlyoutPosition} role="group" aria-label="Advanced vector tools">
+                {[{ id: "contour", label: "Contour", tip: "Create editable inward or outward offset bands" }, { id: "blend", label: "Blend", tip: "Interpolate editable shapes with matching paths" }, { id: "envelope", label: "Envelope", tip: "Drag the four envelope corners to deform a custom vector" }, { id: "knife", label: "Knife", tip: "Drag a cut line through selected closed vectors" }].map((tool) => <button key={tool.id} type="button" className={activeTool === tool.id ? "is-current" : ""} title={tool.tip} aria-pressed={activeTool === tool.id} disabled={tool.id === "envelope" && selectedObject?.shape !== "custom"} onClick={() => { if (tool.id === "envelope") activateEnvelopeTool(); else setActiveTool(tool.id); setAdvancedFlyoutOpen(false); }}><span>{tool.label}</span></button>)}
+              </div>}
+            </div>
+            <span className="toolbox-divider" />
+            <span className="toolbox-section-label">ADD</span>
             <button type="button" title="Add text" aria-label="Add text" onClick={addText}><span>T</span></button>
             <button type="button" title="Add shape" aria-label="Add shape" onClick={() => setShapePickerOpen(true)}><span>□</span></button>
-            <button type="button" className={activeTool === "pen" ? "is-current" : ""} title="Pen / Bezier" aria-label="Pen tool" aria-pressed={activeTool === "pen"} onClick={() => { setActiveTool("pen"); changePathDraft(null); }}><span>⌁</span></button>
-            <button type="button" className={activeTool === "freehand" ? "is-current" : ""} title="Freehand drawing" aria-label="Freehand tool" aria-pressed={activeTool === "freehand"} onClick={() => { setActiveTool("freehand"); changePathDraft(null); }}><span>〰</span></button>
             <button type="button" title="Import image" aria-label="Import image" onClick={() => uploadRef.current?.click()}><span>▧</span></button>
             <button type="button" title="Open flower collection" aria-label="Open flower collection" onClick={() => setFlowerPickerOpen(true)}><span>&#127800;</span></button>
             <button type="button" title="Import editable SVG" aria-label="Import editable SVG" disabled={svgImportBusy} onClick={() => svgUploadRef.current?.click()}><span>&#9671;</span></button>
             <button type="button" title="Background remover" aria-label="Remove image background" disabled={selectedObject?.type !== "image"} onClick={() => setEditingImageId(selectedObject.id)}><span>✧</span></button>
-            <label className="toolbox-color" title="Set selected object or drawing color"><span>◐</span><input type="color" aria-label="Selected object or drawing color" value={selectedObject?.color ?? vectorFill} onFocus={() => selectedObject && saveHistory()} onChange={(event) => selectedObject ? updateSelected({ color: event.target.value }) : setVectorFill(event.target.value)} /></label>
             <span className="toolbox-divider" />
             <span className="toolbox-section-label">VIEW</span>
-            <button type="button" className={activeTool === "pan" ? "is-current" : ""} title="Pan canvas" aria-label="Pan tool" aria-pressed={activeTool === "pan"} onClick={() => setActiveTool(activeTool === "pan" ? "select" : "pan")}><span>✋</span></button>
             <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeCanvasZoom(1.2)}><span>＋</span></button>
             <button type="button" title="Fit page" aria-label="Fit page to workspace" onClick={resetCanvasView}><span>⊡</span></button>
           </aside>
@@ -4285,12 +5110,14 @@ function deletePage(pageId) {
             </div>
             <div className="canvas-view-controls" role="group" aria-label="Canvas zoom controls">
               <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
-              <span>{Math.round(canvasZoom * fittedCanvas.scale * 100)}%</span>
+              <span className="zoom-readout" title={`Up to ${Math.round(64 * fittedCanvas.scale * 100)}% document scale`}>{Math.round(canvasZoom * fittedCanvas.scale * 100)}%</span>
               <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
-              <button type="button" onClick={resetCanvasView}>Fit</button>
+              <button type="button" aria-label="Fit Page" title="Fit page" onClick={resetCanvasView}>Fit Page</button>
+              <button type="button" aria-label="Fit Selection" title="Fit selection (Ctrl+Shift+F)" disabled={!selectedIds.length} onClick={fitSelectionInView}>Fit Selection</button>
+              <button type="button" aria-label="Fit Drawing" title="Fit all objects (Ctrl+Shift+A)" disabled={!objects.length} onClick={fitDrawingInView}>Fit All</button>
             </div>
             <div ref={canvasWrapRef} className="canvas-wrap">
-              <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: `${fittedCanvas.width}px`, height: `${fittedCanvas.height}px`, maxWidth: "none", maxHeight: "none", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
+          <div ref={canvasRef} className={`poster-canvas tool-${activeTool}`} style={{ aspectRatio: `${dimensions.width} / ${dimensions.height}`, width: `${fittedCanvas.width}px`, height: `${fittedCanvas.height}px`, maxWidth: "none", maxHeight: "none", backgroundColor: background, backgroundImage: backgroundMode === "gradient" ? backgroundGradientCss : "none", transform: `translate(${canvasViewOffset.x}px, ${canvasViewOffset.y}px) scale(${canvasZoom})`, transformOrigin: "center center" }} onPointerDown={beginCanvasPointer} onPointerMove={updateCanvasInteraction} onPointerUp={endCanvasInteraction} onPointerCancel={(event) => { canvasPointersRef.current.delete(event.pointerId); pinchRef.current = null; if (dragRef.current?.pointerId == null || dragRef.current.pointerId === event.pointerId) dragRef.current = null; setSelectionMarquee(null); setShapeDraftState(null); envelopeDragRef.current = null; }} onDoubleClick={() => { if (activeTool === "pen" && pathDraft) finishDrawing(false); }}>
                 <div className="poster-artwork">
                   {activeBackgroundImage && <img className="poster-background-image" src={activeBackgroundImage} alt="" draggable="false" />}
                   {backgroundOverlayEnabled && <div className="poster-background-overlay" style={{ opacity: backgroundOverlayOpacity / 100 }} />}
@@ -4299,7 +5126,13 @@ function deletePage(pageId) {
                 <div className="canvas-interaction-layer">
                   {renderableObjects.map((object) => renderCanvasObject(object, true))}
                   {objects.filter((object) => object.type === "group" && selectedIds.includes(object.id)).map((group) => renderCanvasObject(group, true))}
-                  {pathDraft && <svg className="vector-drawing-preview" viewBox="0 0 100 100" preserveAspectRatio="none"><path d={activeTool === "pen" ? pathToSvg([{ nodes: pathDraft, closed: false }]) : `M ${pathDraft.map((point) => `${point.x} ${point.y}`).join(" L ")}`} fill={closedDrawing ? `${vectorFill}66` : "none"} stroke={vectorStroke} strokeWidth="0.35" vectorEffect="non-scaling-stroke" /></svg>}
+                  {pathDraft && <svg className="vector-drawing-preview" viewBox="0 0 100 100" preserveAspectRatio="none"><path d={activeTool === "freehand" ? `M ${pathDraft.map((point) => `${point.x} ${point.y}`).join(" L ")}` : pathToSvg([{ nodes: pathDraft, closed: false }])} fill={closedDrawing ? `${vectorFill}66` : "none"} stroke={vectorStroke} strokeWidth="0.35" vectorEffect="non-scaling-stroke" /></svg>}
+                  {shapeDraft && shapeDraftBounds && <svg className="shape-drawing-preview" viewBox="0 0 100 100" preserveAspectRatio="none">
+                    {shapeDraft.tool === "rectangle" && <rect x={shapeDraftBounds.x} y={shapeDraftBounds.y} width={shapeDraftBounds.width} height={shapeDraftBounds.height} fill={fillEnabled ? `${vectorFill}66` : "none"} stroke={strokeEnabled ? vectorStroke : "none"} strokeWidth="0.4" vectorEffect="non-scaling-stroke" />}
+                    {shapeDraft.tool === "ellipse" && <ellipse cx={shapeDraftBounds.x + shapeDraftBounds.width / 2} cy={shapeDraftBounds.y + shapeDraftBounds.height / 2} rx={shapeDraftBounds.width / 2} ry={shapeDraftBounds.height / 2} fill={fillEnabled ? `${vectorFill}66` : "none"} stroke={strokeEnabled ? vectorStroke : "none"} strokeWidth="0.4" vectorEffect="non-scaling-stroke" />}
+                    {shapeDraft.tool === "polygon" && <polygon points={polygonDraftPoints} fill={fillEnabled ? `${vectorFill}66` : "none"} stroke={strokeEnabled ? vectorStroke : "none"} strokeWidth="0.4" vectorEffect="non-scaling-stroke" />}
+                    {shapeDraft.tool === "knife" && <line x1={shapeDraft.start.x} y1={shapeDraft.start.y} x2={shapeDraft.point.x} y2={shapeDraft.point.y} stroke="#da4936" strokeWidth="0.45" vectorEffect="non-scaling-stroke" />}
+                  </svg>}
                   {selectionMarquee && <div className="selection-marquee" style={{ left: `${Math.min(selectionMarquee.startX, selectionMarquee.x)}%`, top: `${Math.min(selectionMarquee.startY, selectionMarquee.y)}%`, width: `${Math.abs(selectionMarquee.x - selectionMarquee.startX)}%`, height: `${Math.abs(selectionMarquee.y - selectionMarquee.startY)}%` }} />}
                 </div>
               </div>
@@ -4406,7 +5239,7 @@ function deletePage(pageId) {
               <details className="text-section">
                 <summary>Text</summary>
                 <label className="field-label" htmlFor="poster-text">Content</label>
-                <textarea id="poster-text" className="text-input" dir={selectedObject.direction ?? "auto"} style={{ fontFamily: selectedObject.fontFamily ?? fontOptions[0].value, fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400), fontStyle: selectedObject.italic ? "italic" : "normal", letterSpacing: `${selectedObject.letterSpacing ?? 0}px`, wordSpacing: `${selectedObject.wordSpacing ?? 0}px`, lineHeight: selectedObject.lineHeight ?? 1.25 }} value={selectedObject.text} onChange={(event) => updateSelected({ text: event.target.value })} />
+                <textarea id="poster-text" className="text-input" dir={selectedObject.direction ?? "auto"} style={{ fontFamily: resolveTextFontFamily(selectedObject.fontFamily ?? fontOptions[0].value), fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400), fontStyle: selectedObject.italic ? "italic" : "normal", letterSpacing: `${selectedObject.letterSpacing ?? 0}px`, wordSpacing: `${selectedObject.wordSpacing ?? 0}px`, lineHeight: selectedObject.lineHeight ?? 1.25 }} value={selectedObject.text} onFocus={() => beginTextEdit(selectedObject)} onBlur={() => endTextEdit(selectedObject.id)} onChange={(event) => updateTextFromEditor(event.target.value)} />
               </details>
               <details className="text-section">
                 <summary>Font</summary>
@@ -4429,7 +5262,7 @@ function deletePage(pageId) {
                 {(() => {
                   const selectedFont = fontOptions.find((font) => font.value === selectedObject.fontFamily);
                   const personalFont = personalFonts.find((font) => `"${font.family}"` === selectedObject.fontFamily);
-                  return <div className="font-preview" style={{ fontFamily: selectedObject.fontFamily, fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400) }} lang={selectedFont?.category === "Urdu Nastaliq" ? "ur" : selectedFont?.category === "Arabic" ? "ar" : selectedFont?.category === "Hindi / Devanagari" ? "hi" : "en"} dir={selectedFont?.category === "Urdu Nastaliq" || selectedFont?.category === "Arabic" ? "rtl" : "ltr"}>{selectedFont?.sample ?? (personalFont ? (selectedObject.text || "Font preview") : "Font unavailable on this device")}</div>;
+                  return <div className="font-preview" style={{ fontFamily: resolveTextFontFamily(selectedObject.fontFamily), fontWeight: selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400) }} lang={selectedFont?.category === "Urdu Nastaliq" ? "ur" : selectedFont?.category === "Arabic" ? "ar" : selectedFont?.category === "Hindi / Devanagari" ? "hi" : "en"} dir={selectedFont?.category === "Urdu Nastaliq" || selectedFont?.category === "Arabic" ? "rtl" : "ltr"}>{selectedFont?.sample ?? (personalFont ? (selectedObject.text || "Font preview") : "Font unavailable on this device")}</div>;
                 })()}
                 <label className="field-label" htmlFor="font-weight">Font weight</label>
                 <select id="font-weight" className="font-select" value={selectedObject.fontWeight ?? (selectedObject.bold ? 700 : 400)} onChange={(event) => updateSelected({ fontWeight: Number(event.target.value), bold: Number(event.target.value) >= 600 })}>{(() => {
@@ -4489,7 +5322,7 @@ function deletePage(pageId) {
                 <summary>Fill</summary>
                 <label className="field-label" htmlFor="fill-mode">Fill type</label>
                 <select id="fill-mode" className="font-select" value={selectedObject.fillMode ?? "solid"} onChange={(event) => updateSelected({ fillMode: event.target.value })}><option value="solid">Solid</option><option value="gradient">Gradient</option><option value="image">Image</option></select>
-                {(selectedObject.fillMode ?? "solid") === "solid" ? <label className="field-label color-label">Text color<input type="color" value={selectedObject.color ?? "#17352c"} onChange={(event) => updateSelected({ color: event.target.value })} /></label> : selectedObject.fillMode === "gradient" ? <>
+                {(selectedObject.fillMode ?? "solid") === "solid" ? <label className="field-label color-label">Text color<input type="color" value={selectedObject.color ?? "#17352c"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ color: event.target.value })} /></label> : selectedObject.fillMode === "gradient" ? <>
                   <label className="field-label color-label">Gradient color 1<input type="color" value={selectedObject.gradientColor1 ?? "#e7c36f"} onChange={(event) => updateSelected({ gradientColor1: event.target.value })} /></label>
                   <label className="field-label color-label">Gradient color 2<input type="color" value={selectedObject.gradientColor2 ?? "#a97826"} onChange={(event) => updateSelected({ gradientColor2: event.target.value })} /></label>
                   <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.gradientColor3Enabled)} onChange={(event) => updateSelected({ gradientColor3Enabled: event.target.checked })} />Use third color</label>
@@ -4530,6 +5363,18 @@ function deletePage(pageId) {
                   <label className="field-label color-label">Outline color<input type="color" value={selectedObject.strokeColor ?? "#442d0b"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeColor: event.target.value })} /></label>
                   <label className="field-label" htmlFor="stroke-width">Stroke width <span>{selectedObject.strokeWidth ?? 2}px</span></label>
                   <input id="stroke-width" className="size-range" type="range" min="0" max="12" step="0.5" value={selectedObject.strokeWidth ?? 2} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeWidth: Number(event.target.value) })} />
+                  <label className="field-label" htmlFor="stroke-line-join">Corner style</label>
+                  <select
+                    id="stroke-line-join"
+                    className="font-select"
+                    aria-label="Outline corner style"
+                    value={selectedObject.strokeLineJoin ?? "round"}
+                    onPointerDown={saveHistory}
+                    onChange={(event) => updateSelected({ strokeLineJoin: event.target.value })}
+                  >
+                    <option value="round">Round corners</option>
+                    <option value="sharp">Sharp corners</option>
+                  </select>
                 </>}
               </details>
               <details className="text-section">
@@ -4593,20 +5438,27 @@ function deletePage(pageId) {
             {selectedObject?.type === "shape" && <>
               <details className="text-section">
                 <summary>Shape</summary>
-              <label className="field-label color-label">Shape color<input type="color" value={selectedObject.color} onChange={(event) => updateSelected({ color: event.target.value })} /></label>
-              {selectedObject.shape === "custom" && <>
+              <label className="field-label color-label">Shape color<input type="color" value={selectedObject.color ?? "#d5ad62"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ color: event.target.value })} /></label>
+              {(selectedObject.shape === "custom" || primitiveVectorShapes.includes(selectedObject.shape)) && <>
                 <label className="effect-toggle"><input type="checkbox" checked={selectedObject.fillEnabled !== false} onChange={(event) => updateSelected({ fillEnabled: event.target.checked })} />Fill enabled</label>
                 <label className="effect-toggle"><input type="checkbox" checked={Boolean(selectedObject.strokeEnabled)} onChange={(event) => updateSelected({ strokeEnabled: event.target.checked })} />Stroke enabled</label>
-                <label className="field-label color-label">Stroke color<input type="color" value={selectedObject.strokeColor ?? "#17352c"} onChange={(event) => updateSelected({ strokeColor: event.target.value })} /></label>
+                <label className="field-label color-label">Stroke color<input type="color" value={selectedObject.strokeColor ?? "#17352c"} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeColor: event.target.value })} /></label>
                 <label className="field-label" htmlFor="custom-stroke-width">Stroke width <span>{selectedObject.strokeWidth ?? 1}</span></label>
                 <input id="custom-stroke-width" className="size-range" type="range" min="0.5" max="12" step="0.5" value={selectedObject.strokeWidth ?? 1} onChange={(event) => updateSelected({ strokeWidth: Number(event.target.value) })} />
+                <label className="field-label" htmlFor="vector-fill-opacity">Fill opacity <span>{selectedObject.fillOpacity == null ? 100 : Math.round(selectedObject.svgImported ? selectedObject.fillOpacity * 100 : selectedObject.fillOpacity)}%</span></label>
+                <input id="vector-fill-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.fillOpacity == null ? 100 : selectedObject.svgImported ? selectedObject.fillOpacity * 100 : selectedObject.fillOpacity} onPointerDown={saveHistory} onChange={(event) => updateSelected({ fillOpacity: selectedObject.svgImported ? Number(event.target.value) / 100 : Number(event.target.value) })} />
+                <label className="field-label" htmlFor="vector-stroke-opacity">Stroke opacity <span>{selectedObject.strokeOpacity == null ? 100 : Math.round(selectedObject.svgImported ? selectedObject.strokeOpacity * 100 : selectedObject.strokeOpacity)}%</span></label>
+                <input id="vector-stroke-opacity" className="size-range" type="range" min="0" max="100" value={selectedObject.strokeOpacity == null ? 100 : selectedObject.svgImported ? selectedObject.strokeOpacity * 100 : selectedObject.strokeOpacity} onPointerDown={saveHistory} onChange={(event) => updateSelected({ strokeOpacity: selectedObject.svgImported ? Number(event.target.value) / 100 : Number(event.target.value) })} />
+                {selectedObject.shape === "custom" && <>
                 <label className="effect-toggle"><input type="checkbox" checked={activeTool === "node"} onChange={(event) => { setActiveTool(event.target.checked ? "node" : "select"); setSelectedNodeIndex(null); }} />Edit vector nodes</label>
                 <div className="editor-menu-actions">
                   <button type="button" onClick={addNodeToSelectedPath}>Add node</button>
                   <button type="button" disabled={selectedNodeIndex == null} onClick={removeSelectedNode}>Delete node</button>
                 </div>
                 <button type="button" disabled={selectedNodeIndex == null} onClick={toggleSelectedNodeType}>Toggle corner / smooth</button>
+                </>}
               </>}
+              {primitiveVectorShapes.includes(selectedObject.shape) && <button type="button" className="replace-image-btn" onClick={convertSelectedToCurves}>Convert to Curves</button>}
               <label className="effect-toggle"><input type="checkbox" checked={selectedObject.keepAspectRatio ?? proportionalShapeIds.has(selectedObject.shape)} onChange={(event) => updateSelected({ keepAspectRatio: event.target.checked })} />Keep proportions</label>
               <label className="field-label" htmlFor="shape-width">Width <span>{selectedObject.width ?? (selectedShapeIsVector ? 38 : 140)}{selectedShapeIsVector ? "%" : "px"}</span></label>
               <input id="shape-width" className="size-range" type="range" min={selectedShapeIsVector ? 8 : 16} max={selectedShapeIsVector ? 92 : 500} value={selectedObject.width ?? (selectedShapeIsVector ? 38 : 140)} onChange={(event) => updateSelected({ width: Number(event.target.value) })} />
@@ -4684,6 +5536,7 @@ function deletePage(pageId) {
             </>}
             {!selectedObject && <p className="panel-empty">Choose a tool to add an element to your poster.</p>}
           </aside>
+          <aside className="desktop-color-rail" aria-label="Desktop color palette">{renderColorPalette()}</aside>
         </div>
         {documentSizeOpen && <div className="document-size-backdrop" role="presentation">
           <section className="document-size-dialog" role="dialog" aria-modal="true" aria-labelledby="document-size-title">

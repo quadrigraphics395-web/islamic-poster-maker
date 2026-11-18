@@ -1,3 +1,24 @@
+export const MIN_CANVAS_ZOOM = 0.01;
+export const MAX_CANVAS_ZOOM = 64;
+
+export function clampCanvasZoom(zoom) {
+  const value = Number(zoom);
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(MAX_CANVAS_ZOOM, Math.max(MIN_CANVAS_ZOOM, value));
+}
+
+export function fitBoundsInViewport(bounds, canvasWidth, canvasHeight, viewportWidth, viewportHeight) {
+  const values = [bounds?.x, bounds?.y, bounds?.width, bounds?.height, canvasWidth, canvasHeight, viewportWidth, viewportHeight].map(Number);
+  if (values.some((value) => !Number.isFinite(value)) || values.slice(2).some((value) => value <= 0)) return null;
+  const [x, y, width, height, pageWidth, pageHeight, viewWidth, viewHeight] = values;
+  const zoom = clampCanvasZoom(Math.min(viewWidth * 0.82 / width, viewHeight * 0.82 / height));
+  const offset = clampCanvasPan({
+    x: -(x + width / 2 - pageWidth / 2) * zoom,
+    y: -(y + height / 2 - pageHeight / 2) * zoom,
+  }, pageWidth, pageHeight, viewWidth, viewHeight, zoom);
+  return { zoom, offset };
+}
+
 export function fitCanvasToViewport(documentWidth, documentHeight, viewportWidth, viewportHeight, zoom = 1) {
   const values = [documentWidth, documentHeight, viewportWidth, viewportHeight, zoom].map(Number);
   if (values.some((value) => !Number.isFinite(value) || value <= 0)) {

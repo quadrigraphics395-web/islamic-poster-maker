@@ -8,8 +8,11 @@
     "build": "vite build",
     "lint": "oxlint",
     "test:geometry": "node --test src/utils/objectGeometry.test.js",
+    "test:e2e": "playwright test",
     "test:vector": "node --test src/utils/vectorGeometry.test.js",
     "test:templates": "node --test src/utils/templateStorage.test.js",
+    "test:cloudflare": "node --test cloudflare/worker/src/index.test.js",
+    "test:cloudflare:local": "node scripts/test-cloudflare-local.mjs",
     "test:background": "node --test src/utils/backgroundRemoval.test.js",
     "test:images": "node --test src/utils/imageProcessing.test.js",
     "test:projects": "node --test src/utils/projectStorage.test.js",
@@ -56,10 +59,16 @@
     "svg-path-parser": "^1.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "wrangler": "^4.158.0"
+  },
+  "allowScripts": {
+    "workerd@1.20261104.1": true,
+    "esbuild@0.28.2": true
   }
 }
