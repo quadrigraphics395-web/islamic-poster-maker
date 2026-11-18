@@ -24,7 +24,7 @@ import { CSS_PIXELS_PER_INCH, DEFAULT_PRINT_DPI, formatUnitValue, getExportBackg
 import { createSinglePageJpegPdf } from "./utils/pdfExport.js";
 import { restoreObjectSnapshot, serializeObjectSnapshot } from "./utils/objectHistory.js";
 import { DEFAULT_IMAGE_FILTERS, IMAGE_FILTER_PRESETS, imageFiltersToCss, normalizeImageFilters } from "./utils/imageFilters.js";
-import { clampCanvasPan, clampCanvasZoom, fitBoundsInViewport, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./utils/canvasViewport.js";
+import { clampCanvasPan, clampCanvasPanWithMargins, clampCanvasZoom, fitBoundsInViewport, fitCanvasToViewport, mobilePropertiesWidth, zoomOffsetAtPoint } from "./utils/canvasViewport.js";
 import { QADRI_COLOR_PALETTE } from "./utils/colorPalette.js";
 import { importSvgDocument } from "./utils/svgImport.js";
 import { isEditableKeyboardTarget } from "./utils/editorKeyboard.js";
@@ -1034,7 +1034,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
       setCanvasZoom(nextZoom);
       setCanvasViewOffset((current) => zoomOffsetAtPoint(
         current, canvasZoom, nextZoom, event.clientX - bounds.left, event.clientY - bounds.top,
-        bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height,
+        bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height, true,
       ));
     };
     workspace.addEventListener("wheel", onWheel, { passive: false });
@@ -1063,7 +1063,7 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
           : { width: bounds.width, height: bounds.height }
       ));
       const nextFit = fitCanvasToViewport(dimensions.width, dimensions.height, bounds.width, bounds.height);
-      setCanvasViewOffset((current) => clampCanvasPan(current, nextFit.width, nextFit.height, bounds.width, bounds.height, canvasZoom));
+      setCanvasViewOffset((current) => clampCanvasPanWithMargins(current, nextFit.width, nextFit.height, bounds.width, bounds.height, canvasZoom));
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(element);
@@ -1238,24 +1238,27 @@ const [snapGridEnabled, setSnapGridEnabled] = useState(true);
     resetCanvasView();
   }
 
-  function clampCanvasViewOffset(offset, zoom = canvasZoom) {
+  function clampCanvasViewOffset(offset, zoom = canvasZoom, preserveAnchor = false) {
     const wrap = canvasWrapRef.current;
     const viewportWidth = canvasViewportSize.width || wrap?.clientWidth || fittedCanvas.width;
     const viewportHeight = canvasViewportSize.height || wrap?.clientHeight || fittedCanvas.height;
-    return clampCanvasPan(offset, fittedCanvas.width, fittedCanvas.height, viewportWidth, viewportHeight, zoom);
+    return preserveAnchor
+      ? clampCanvasPanWithMargins(offset, fittedCanvas.width, fittedCanvas.height, viewportWidth, viewportHeight, zoom)
+      : clampCanvasPan(offset, fittedCanvas.width, fittedCanvas.height, viewportWidth, viewportHeight, zoom);
   }
 
-  function changeCanvasZoom(multiplier) {
+  function changeCanvasZoom(multiplier, anchorPoint = null) {
     const nextZoom = clampCanvasZoom(canvasZoom * multiplier);
     setCanvasZoom(nextZoom);
     const wrap = canvasWrapRef.current;
     const bounds = wrap?.getBoundingClientRect();
     if (!bounds?.width || !bounds?.height) {
-      setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom));
+      setCanvasViewOffset((current) => clampCanvasViewOffset(current, nextZoom, true));
       return;
     }
-    setCanvasViewOffset((current) => zoomOffsetAtPoint(current, canvasZoom, nextZoom, bounds.width / 2, bounds.height / 2,
-      bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height));
+    const point = anchorPoint ?? { x: bounds.width / 2, y: bounds.height / 2 };
+    setCanvasViewOffset((current) => zoomOffsetAtPoint(current, canvasZoom, nextZoom, point.x, point.y,
+      bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height, true));
   }
 
   function zoomCanvasToActualSize() {
@@ -2960,7 +2963,8 @@ function deletePage(pageId) {
       return;
     }
     if (activeTool === "zoom") {
-      changeCanvasZoom(event.shiftKey ? 1 / 1.2 : 1.2);
+      const bounds = canvasWrapRef.current?.getBoundingClientRect();
+      changeCanvasZoom(event.shiftKey ? 1 / 1.2 : 1.2, bounds ? { x: event.clientX - bounds.left, y: event.clientY - bounds.top } : null);
       return;
     }
     if (activeTool === "select" && canvasZoom > 1 && !event.target.closest(".canvas-object")) {
@@ -3023,9 +3027,9 @@ function deletePage(pageId) {
         const { bounds, center: startCenter } = pinchRef.current;
         const anchored = bounds && startCenter
           ? zoomOffsetAtPoint(pinchRef.current.offset, pinchRef.current.zoom, nextZoom,
-            startCenter.x - bounds.left, startCenter.y - bounds.top, bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height)
+            startCenter.x - bounds.left, startCenter.y - bounds.top, bounds.width, bounds.height, fittedCanvas.width, fittedCanvas.height, true)
           : pinchRef.current.offset;
-        setCanvasViewOffset(clampCanvasViewOffset({ x: anchored.x + center.x - startCenter.x, y: anchored.y + center.y - startCenter.y }, nextZoom));
+        setCanvasViewOffset(clampCanvasViewOffset({ x: anchored.x + center.x - startCenter.x, y: anchored.y + center.y - startCenter.y }, nextZoom, true));
       }
       return;
     }
@@ -3360,11 +3364,13 @@ function deletePage(pageId) {
 
   function moveObject(event, object) {
     if (activeTool !== "select" && activeTool !== "multi") return;
+    const isTouch = event.pointerType === "touch";
+    if (isTouch && canvasPointersRef.current.size > 0) return;
     const target = object.groupId && !groupEditMode ? findObject(objects, object.groupId) : object;
     if (!target || target.locked) return;
     if (event.button !== 0) return;
     event.preventDefault();
-    event.stopPropagation();
+    if (!isTouch) event.stopPropagation();
     if (event.shiftKey || event.ctrlKey || event.metaKey || activeTool === "multi") {
       return;
     }
@@ -4763,7 +4769,7 @@ function deletePage(pageId) {
                 </>}
                 {activeTool === "blend" && <>
                   <label className="vector-stroke-control">Blend steps<input aria-label="Blend steps" type="number" min="1" max="64" step="1" value={blendSteps} onChange={(event) => setBlendSteps(Math.max(1, Math.min(64, Number(event.target.value) || 1)))} /></label>
-                  <button type="button" disabled={selectedIds.length !== 2} onClick={createBlend}>Create Blend</button>
+                  <button type="button" disabled={selectedIds.length !== 2} onClick={() => createBlend()}>Create Blend</button>
                 </>}
                 {activeTool === "knife" && <p className="vector-draft-status">Select closed vector shapes, then drag a line across them to split.</p>}
                 {activeTool === "envelope" && <p className="vector-draft-status">Drag any of the four envelope corner handles to deform the selected custom vector.</p>}
@@ -4980,6 +4986,7 @@ function deletePage(pageId) {
             <span className="command-divider" />
             <button type="button" title="Zoom out" aria-label="Zoom out" onClick={() => changeCanvasZoom(1 / 1.2)}>−</button>
             <span className="command-zoom-value">{Math.round(canvasZoom * fittedCanvas.scale * 100)}%</span>
+            <button type="button" aria-label="Fit Selection" title="Fit selection (Ctrl+Shift+F)" disabled={!selectedIds.length} onClick={fitSelectionInView}><span className="command-label">Fit Sel.</span></button>
             <button type="button" title="Zoom in" aria-label="Zoom in" onClick={() => changeCanvasZoom(1.2)}>＋</button>
             <button type="button" title="Fit page to workspace" onClick={resetCanvasView}><span aria-hidden="true">▣</span><span className="command-label">Fit</span></button>
             <button type="button" title="Show document at actual pixel size" onClick={zoomCanvasToActualSize}><span aria-hidden="true">1:1</span><span className="command-label">Actual</span></button>
@@ -5028,7 +5035,7 @@ function deletePage(pageId) {
             {activeTool === "blend" && <>
               <span className="context-object-label">Blend</span>
               <label title="Blend steps">Steps<input aria-label="Blend steps" type="number" min="1" max="64" value={blendSteps} onChange={(event) => setBlendSteps(Math.max(1, Math.min(64, Number(event.target.value) || 1)))} /></label>
-              <button type="button" disabled={selectedIds.length !== 2} onClick={createBlend}>Create Blend</button>
+              <button type="button" disabled={selectedIds.length !== 2} onClick={() => createBlend()}>Create Blend</button>
             </>}
             {activeTool === "envelope" && selectedObject?.shape === "custom" && <span className="context-object-label">Drag the four corner handles to deform the vector</span>}
             {selectedObject && primitiveVectorShapes.includes(selectedObject.shape) && <button type="button" title="Convert the selected primitive to editable path nodes" onClick={convertSelectedToCurves}>Convert to Curves</button>}

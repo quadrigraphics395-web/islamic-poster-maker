@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clampCanvasPan, clampCanvasZoom, fitBoundsInViewport, fitCanvasToViewport, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, mobilePropertiesWidth, zoomOffsetAtPoint } from "./canvasViewport.js";
+import { clampCanvasPan, clampCanvasPanWithMargins, clampCanvasZoom, fitBoundsInViewport, fitCanvasToViewport, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, mobilePropertiesWidth, zoomOffsetAtPoint } from "./canvasViewport.js";
 
 test("A4 portrait keeps its physical aspect ratio when fitted to a narrow mobile workspace", () => {
   const fitted = fitCanvasToViewport(794, 1123, 220, 320);
@@ -75,6 +75,21 @@ test("zoom offset keeps the document point under the pointer fixed", () => {
 
 test("zoom offset respects pan bounds when the requested anchor cannot be retained", () => {
   assert.deepEqual(zoomOffsetAtPoint({ x: 0, y: 0 }, 1, 3, 0, 0, 500, 400, 200, 200), { x: 50, y: 100 });
+});
+
+test("pointer and pinch zoom preserve an off-center focal point while keeping part of the page visible", () => {
+  const pointer = { x: 383, y: 400 };
+  const before = { x: 0, y: 0 };
+  const next = zoomOffsetAtPoint(before, 1, 1.4, pointer.x, pointer.y, 1012, 800, 766, 800, true);
+  const documentPoint = {
+    x: (pointer.x - 1012 / 2 - before.x),
+    y: (pointer.y - 800 / 2 - before.y),
+  };
+  assert.ok(Math.abs(1012 / 2 + next.x + documentPoint.x * 1.4 - pointer.x) < 1e-9);
+  assert.ok(Math.abs(800 / 2 + next.y + documentPoint.y * 1.4 - pointer.y) < 1e-9);
+  const clamped = clampCanvasPanWithMargins({ x: 10000, y: -10000 }, 766, 800, 1012, 800, 1.4);
+  assert.ok(Math.abs(clamped.x) < (766 * 1.4 + 1012) / 2);
+  assert.ok(Math.abs(clamped.y) < (800 * 1.4 + 800) / 2);
 });
 
 test("zoom supports a practical 1% to 6400% fit-relative range", () => {
